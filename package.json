@@ -154,6 +154,7 @@
     "@types/pg": "^8.16.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "electron": "^33.0.0",
     "electron-builder": "^26.8.1",
     "electron-updater": "^6.8.3",
     "eslint": "^9",
