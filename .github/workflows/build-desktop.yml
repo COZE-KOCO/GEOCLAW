@@ -26,8 +26,7 @@ jobs:
 
       - name: Get pnpm store directory
         shell: bash
-        run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
         id: pnpm-cache
 
       - name: Setup pnpm cache
@@ -35,8 +34,7 @@ jobs:
         with:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+          restore-keys: ${{ runner.os }}-pnpm-store-
 
       - name: Install dependencies
         run: pnpm install
@@ -45,13 +43,9 @@ jobs:
         run: pnpm build
 
       - name: Build Electron app
-        run: |
-          pnpm tsc -p tsconfig.electron.json
-          pnpm electron:build --win --publish never
+        run: pnpm electron:build --win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WIN_CSC_LINK: ''
-          WIN_CSC_KEY_PASSWORD: ''
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -77,11 +71,6 @@ jobs:
         with:
           name: win-exe
           path: release-artifacts
-
-      - name: List files
-        run: |
-          echo "## Build Artifacts" >> $GITHUB_STEP_SUMMARY
-          find release-artifacts -type f >> $GITHUB_STEP_SUMMARY
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
