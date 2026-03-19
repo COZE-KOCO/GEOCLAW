@@ -44,11 +44,10 @@ jobs:
       - name: Build Next.js app
         run: pnpm build
 
-      - name: Build Electron app
-        run: |
-          pnpm tsc -p tsconfig.electron.json
-          pnpm electron:build --win --publish never
+     - name: Build Electron app
+        run: pnpm electron:build --win
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WIN_CSC_LINK: ''
           WIN_CSC_KEY_PASSWORD: ''
 
