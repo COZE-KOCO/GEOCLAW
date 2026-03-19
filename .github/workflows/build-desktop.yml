@@ -1,27 +1,14 @@
-name: Build Desktop Client
+name: Build Desktop Client (Windows)
 
 on:
   push:
     tags:
-      - 'v*' # 当推送 v 开头的 tag 时触发，如 v1.0.0
-  workflow_dispatch: # 支持手动触发
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   build:
-    strategy:
-      matrix:
-        include:
-          - os: macos-latest
-            platform: mac
-            artifact: mac-dmg
-          - os: windows-latest
-            platform: win
-            artifact: win-exe
-          - os: ubuntu-latest
-            platform: linux
-            artifact: linux-appimage
-
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
 
     steps:
       - name: Checkout code
@@ -51,13 +38,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
 
-      # Linux 需要额外的依赖来构建 Electron 应用
-      - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-tools rpm
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -67,45 +47,18 @@ jobs:
       - name: Build Electron app
         run: |
           pnpm tsc -p tsconfig.electron.json
-          pnpm electron:build --${{ matrix.platform }} --publish never
+          pnpm electron:build --win --publish never
         env:
-          # 禁用自动更新签名（如果有）
-          CSC_LINK: ''
-          CSC_KEY_PASSWORD: ''
-          # Windows 签名（如果有）
           WIN_CSC_LINK: ''
           WIN_CSC_KEY_PASSWORD: ''
 
-      - name: Upload artifact (macOS)
-        if: matrix.os == 'macos-latest'
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: |
-            release/*.dmg
-            release/mac*/**/*.dmg
-          retention-days: 30
-          if-no-files-found: warn
-
-      - name: Upload artifact (Windows)
-        if: matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
+          name: win-exe
           path: |
             release/*.exe
             release/**/**.exe
-          retention-days: 30
-          if-no-files-found: warn
-
-      - name: Upload artifact (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: |
-            release/*.AppImage
-            release/**/**.AppImage
           retention-days: 30
           if-no-files-found: warn
 
@@ -118,42 +71,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
+          name: win-exe
           path: release-artifacts
 
-      - name: List all files
+      - name: List files
         run: |
-          echo "## 构建产物" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Artifacts" >> $GITHUB_STEP_SUMMARY
           find release-artifacts -type f >> $GITHUB_STEP_SUMMARY
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release-artifacts/**/*
+          files: release-artifacts/**
           generate_release_notes: true
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Output download URLs
-        run: |
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 下载链接" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "发布页面: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 配置到扣子环境变量" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "请根据 Release 中的实际文件名配置以下环境变量：" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| 变量名 | 说明 |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|------|" >> $GITHUB_STEP_SUMMARY
-          echo "| DESKTOP_DOWNLOAD_URL_MAC | macOS 安装包下载链接 |" >> $GITHUB_STEP_SUMMARY
-          echo "| DESKTOP_DOWNLOAD_URL_WIN | Windows 安装包下载链接 |" >> $GITHUB_STEP_SUMMARY
-          echo "| DESKTOP_DOWNLOAD_URL_LINUX | Linux 安装包下载链接 |" >> $GITHUB_STEP_SUMMARY
-          echo "| DESKTOP_VERSION | 版本号（如 ${{ github.ref_name }}） |" >> $GITHUB_STEP_SUMMARY
-          echo "| DESKTOP_RELEASE_DATE | 发布日期（如 $(date +%Y-%m-%d)） |" >> $GITHUB_STEP_SUMMARY
