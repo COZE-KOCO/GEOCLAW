@@ -49,6 +49,7 @@ jobs:
           pnpm tsc -p tsconfig.electron.json
           pnpm electron:build --win --publish never
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WIN_CSC_LINK: ''
           WIN_CSC_KEY_PASSWORD: ''
 
