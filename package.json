@@ -22,9 +22,8 @@
       "output": "release"
     },
     "files": [
-      "dist/electron/**/*",
-      "out/**/*",
-      "public/**/*"
+     "dist/electron/**/*",
+     "public/**/*"
     ],
     "publish": {
       "provider": "github",
