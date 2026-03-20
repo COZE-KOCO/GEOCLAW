@@ -7,9 +7,11 @@ let mainWindow: BrowserWindow | null = null;
 let authManager: PlatformAuthManager;
 let currentBusinessId: string = 'default';
 
-// 开发模式下加载localhost，生产模式加载打包后的文件
+// 开发模式下加载localhost，生产模式加载远程服务器
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 const DEV_SERVER_URL = 'http://localhost:5000';
+// 生产模式下的服务器地址
+const PROD_SERVER_URL = process.env.ELECTRON_SERVER_URL || 'https://geoclaw.coze.site';
 
 // 配置自动更新
 autoUpdater.autoDownload = false; // 不自动下载，让用户选择
@@ -41,7 +43,7 @@ function createWindow() {
     mainWindow.loadURL(DEV_SERVER_URL);
     mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../out/index.html'));
+    mainWindow.loadURL(PROD_SERVER_URL);
   }
 
   // 处理外部链接
