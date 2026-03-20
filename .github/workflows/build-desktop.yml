@@ -9,7 +9,7 @@ on:
       tag:
         description: 'Release tag (e.g., v1.0.0)'
         required: true
-        default: 'v1.0.0'
+        default: 'v1.0.1'
 
 jobs:
   build:
@@ -52,6 +52,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: List release files
+        shell: bash
+        run: |
+          echo "=== Checking release directory ==="
+          ls -la release/ 2>/dev/null || echo "release/ directory not found"
+          echo "=== All exe files ==="
+          find . -name "*.exe" 2>/dev/null || echo "No exe files found"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -60,7 +68,7 @@ jobs:
             release/*.exe
             release/**/**.exe
           retention-days: 30
-          if-no-files-found: warn
+          if-no-files-found: error
 
   release:
     needs: build
@@ -78,6 +86,11 @@ jobs:
           name: win-exe
           path: release-artifacts
 
+      - name: List downloaded files
+        run: |
+          echo "=== Downloaded artifacts ==="
+          ls -laR release-artifacts/
+
       - name: Get tag name
         id: tag
         run: |
@@ -92,4 +105,8 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.TAG }}
           files: release-artifacts/**
-          g
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
