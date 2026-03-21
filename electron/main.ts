@@ -1,19 +1,91 @@
 import { app, BrowserWindow, ipcMain, session, shell, dialog } from 'electron';
 import * as path from 'path';
+import { spawn, ChildProcess } from 'child_process';
 import { autoUpdater } from 'electron-updater';
 import { PlatformAuthManager } from './platform-auth';
+import { createPublishScheduler, getPublishScheduler } from './publish-scheduler';
+import { createCreationScheduler, getCreationScheduler } from './creation-scheduler';
 
 let mainWindow: BrowserWindow | null = null;
 let authManager: PlatformAuthManager;
 let currentBusinessId: string = 'default';
+let serverProcess: ChildProcess | null = null;
 
-// 开发模式下加载localhost，生产模式加载打包后的文件
+// 开发模式下加载localhost，生产模式启动本地服务器
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 const DEV_SERVER_URL = 'http://localhost:5000';
+const LOCAL_SERVER_PORT = 5000;
+const LOCAL_SERVER_URL = `http://localhost:${LOCAL_SERVER_PORT}`;
+// 远程服务器地址（扣子云端）
+const REMOTE_SERVER_URL = process.env.ELECTRON_SERVER_URL || 'https://geoclaw.coze.site';
+// 生产环境：优先使用远程服务器（云端API），确保能访问扣子内置数据库
+const PROD_SERVER_URL = REMOTE_SERVER_URL;
 
 // 配置自动更新
 autoUpdater.autoDownload = false; // 不自动下载，让用户选择
 autoUpdater.autoInstallOnAppQuit = true; // 退出时自动安装
+
+// 启动本地 Next.js 服务器
+function startLocalServer(): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (isDev) {
+      console.log('开发模式，跳过启动本地服务器');
+      resolve(true);
+      return;
+    }
+
+    const serverPath = path.join(process.resourcesPath, 'server');
+    const nextPath = path.join(serverPath, 'node_modules', 'next', 'dist', 'bin', 'next');
+    
+    console.log('正在启动本地服务器...', serverPath);
+    
+    // 设置环境变量
+    const env = {
+      ...process.env,
+      NODE_ENV: 'production',
+      PORT: LOCAL_SERVER_PORT.toString(),
+    };
+
+    try {
+      serverProcess = spawn('node', [nextPath, 'start', '--port', LOCAL_SERVER_PORT.toString()], {
+        cwd: serverPath,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      serverProcess.stdout?.on('data', (data) => {
+        console.log(`[Server] ${data}`);
+      });
+
+      serverProcess.stderr?.on('data', (data) => {
+        console.error(`[Server Error] ${data}`);
+      });
+
+      serverProcess.on('error', (err) => {
+        console.error('启动本地服务器失败:', err);
+        resolve(false);
+      });
+
+      // 等待服务器启动
+      setTimeout(() => {
+        console.log('本地服务器启动完成');
+        resolve(true);
+      }, 3000);
+    } catch (error) {
+      console.error('启动本地服务器异常:', error);
+      resolve(false);
+    }
+  });
+}
+
+// 停止本地服务器
+function stopLocalServer() {
+  if (serverProcess) {
+    console.log('正在停止本地服务器...');
+    serverProcess.kill();
+    serverProcess = null;
+  }
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -38,10 +110,14 @@ function createWindow() {
 
   // 加载应用
   if (isDev) {
+    // 开发模式：加载本地开发服务器
     mainWindow.loadURL(DEV_SERVER_URL);
     mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../out/index.html'));
+    // 生产模式：直接加载远程服务器（扣子云端）
+    // 这样可以确保访问扣子内置数据库和 AI 服务
+    console.log('生产模式，连接远程服务器:', REMOTE_SERVER_URL);
+    mainWindow.loadURL(REMOTE_SERVER_URL);
   }
 
   // 处理外部链接
@@ -183,6 +259,64 @@ function initAutoUpdater() {
   });
 }
 
+// 初始化发布任务调度器
+function initPublishScheduler() {
+  const serverUrl = isDev ? DEV_SERVER_URL : PROD_SERVER_URL;
+  const scheduler = createPublishScheduler(mainWindow, serverUrl, 60000); // 每60秒检查一次
+
+  // 启动调度器
+  scheduler.start();
+  console.log('[Electron] 发布任务调度器已启动');
+
+  // IPC: 获取调度器状态
+  ipcMain.handle('scheduler-status', () => {
+    return scheduler.getStatus();
+  });
+
+  // IPC: 手动触发检查
+  ipcMain.handle('scheduler-trigger', async () => {
+    await scheduler.triggerCheck();
+    return { success: true };
+  });
+
+  // IPC: 停止/启动调度器
+  ipcMain.handle('scheduler-toggle', (_, enable: boolean) => {
+    if (enable) {
+      scheduler.start();
+    } else {
+      scheduler.stop();
+    }
+    return { success: true };
+  });
+}
+
+// 初始化创作任务调度器
+function initCreationScheduler() {
+  const serverUrl = isDev ? DEV_SERVER_URL : PROD_SERVER_URL;
+  const scheduler = createCreationScheduler(mainWindow, serverUrl, 60000); // 每60秒检查一次
+
+  // IPC: 获取创作调度器状态
+  ipcMain.handle('creation-scheduler-status', () => {
+    return scheduler.getStatus();
+  });
+
+  // IPC: 手动触发创作检查
+  ipcMain.handle('creation-scheduler-trigger', async () => {
+    await scheduler.triggerCheck();
+    return { success: true };
+  });
+
+  // IPC: 停止/启动创作调度器
+  ipcMain.handle('creation-scheduler-toggle', (_, enable: boolean) => {
+    if (enable) {
+      scheduler.start();
+    } else {
+      scheduler.stop();
+    }
+    return { success: true };
+  });
+}
+
 app.whenReady().then(() => {
   // 创建示例配置文件（首次运行）
   PlatformAuthManager.createExampleConfig();
@@ -190,6 +324,8 @@ app.whenReady().then(() => {
   createWindow();
   initAuthManager();
   initAutoUpdater();
+  initPublishScheduler(); // 启动发布任务调度器
+  initCreationScheduler(); // 启动创作任务调度器
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -199,6 +335,7 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  stopLocalServer();
   if (process.platform !== 'darwin') {
     app.quit();
   }

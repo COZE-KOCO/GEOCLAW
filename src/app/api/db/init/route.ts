@@ -264,6 +264,55 @@ CREATE TABLE IF NOT EXISTS geo_analysis_results (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 创作计划表（全自动创作发布）
+CREATE TABLE IF NOT EXISTS creation_plans (
+  id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id VARCHAR(36) NOT NULL,
+  plan_name VARCHAR(200) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  frequency VARCHAR(20) NOT NULL DEFAULT 'daily',
+  articles_per_run INTEGER NOT NULL DEFAULT 1,
+  scheduled_time VARCHAR(10) DEFAULT '09:00',
+  scheduled_days JSONB DEFAULT '[]',
+  scheduled_dates JSONB DEFAULT '[]',
+  content_config JSONB NOT NULL,
+  publish_config JSONB NOT NULL,
+  total_created INTEGER DEFAULT 0,
+  total_published INTEGER DEFAULT 0,
+  success_rate DECIMAL(5,2) DEFAULT 0,
+  last_run_at TIMESTAMPTZ,
+  next_run_at TIMESTAMPTZ,
+  start_date TIMESTAMPTZ DEFAULT NOW(),
+  end_date TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 关键词库表
+CREATE TABLE IF NOT EXISTS keyword_libraries (
+  id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id VARCHAR(36) NOT NULL,
+  name VARCHAR(200) NOT NULL,
+  description TEXT,
+  keywords JSONB DEFAULT '[]',
+  keyword_count INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 创作规则表（批量创作配置）
+CREATE TABLE IF NOT EXISTS creation_rules (
+  id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id VARCHAR(36) NOT NULL,
+  name VARCHAR(200) NOT NULL,
+  description TEXT,
+  rule_type VARCHAR(20) NOT NULL DEFAULT 'article',
+  config JSONB NOT NULL,
+  is_default BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- 创建索引
 CREATE INDEX IF NOT EXISTS businesses_type_idx ON businesses(type);
 CREATE INDEX IF NOT EXISTS businesses_industry_idx ON businesses(industry);
@@ -316,6 +365,19 @@ CREATE INDEX IF NOT EXISTS geo_analysis_tasks_created_at_idx ON geo_analysis_tas
 CREATE INDEX IF NOT EXISTS geo_analysis_results_task_id_idx ON geo_analysis_results(task_id);
 CREATE INDEX IF NOT EXISTS geo_analysis_results_platform_idx ON geo_analysis_results(platform);
 CREATE INDEX IF NOT EXISTS geo_analysis_results_cited_idx ON geo_analysis_results(cited);
+
+-- creation_plans 索引
+CREATE INDEX IF NOT EXISTS creation_plans_business_id_idx ON creation_plans(business_id);
+CREATE INDEX IF NOT EXISTS creation_plans_status_idx ON creation_plans(status);
+CREATE INDEX IF NOT EXISTS creation_plans_frequency_idx ON creation_plans(frequency);
+CREATE INDEX IF NOT EXISTS creation_plans_next_run_at_idx ON creation_plans(next_run_at);
+
+-- keyword_libraries 索引
+CREATE INDEX IF NOT EXISTS keyword_libraries_business_id_idx ON keyword_libraries(business_id);
+
+-- creation_rules 索引
+CREATE INDEX IF NOT EXISTS creation_rules_business_id_idx ON creation_rules(business_id);
+CREATE INDEX IF NOT EXISTS creation_rules_rule_type_idx ON creation_rules(rule_type);
 `;
 
 export async function GET(request: NextRequest) {
@@ -381,6 +443,9 @@ export async function POST(request: NextRequest) {
       'health_check',
       'geo_analysis_tasks',
       'geo_analysis_results',
+      'creation_plans',
+      'keyword_libraries',
+      'creation_rules',
     ];
 
     const results: { table: string; status: string; error?: string }[] = [];
@@ -390,7 +455,10 @@ export async function POST(request: NextRequest) {
       try {
         const { error } = await client.from(table).select('id').limit(1);
         if (error) {
-          if (error.code === '42P01') {
+          // 检查是否是表不存在的错误
+          if (error.code === '42P01' || 
+              error.message?.includes('Could not find the table') ||
+              error.message?.includes('does not exist')) {
             results.push({ table, status: 'missing' });
           } else {
             results.push({ table, status: 'error', error: error.message });
@@ -405,17 +473,21 @@ export async function POST(request: NextRequest) {
 
     const missingTables = results.filter(r => r.status === 'missing');
     const existingTables = results.filter(r => r.status === 'exists');
+    const errorTables = results.filter(r => r.status === 'error');
 
     return NextResponse.json({
       success: true,
       message: missingTables.length > 0 
         ? `发现 ${missingTables.length} 个表未创建，请在 Supabase 控制台执行建表 SQL`
-        : '所有表已存在',
+        : errorTables.length > 0
+          ? `部分表检查出错，可能需要在 Supabase 控制台执行建表 SQL`
+          : '所有表已存在',
       tables: results,
       missingTables: missingTables.map(r => r.table),
       existingTables: existingTables.map(r => r.table),
-      sql: missingTables.length > 0 ? CREATE_TABLES_SQL : undefined,
-      hint: missingTables.length > 0 
+      errorTables: errorTables.map(r => ({ table: r.table, error: r.error })),
+      sql: (missingTables.length > 0 || errorTables.length > 0) ? CREATE_TABLES_SQL : undefined,
+      hint: (missingTables.length > 0 || errorTables.length > 0)
         ? '请在 Supabase 控制台的 SQL Editor 中执行上述 SQL 语句来创建缺失的表'
         : undefined,
     });
