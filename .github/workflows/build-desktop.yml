@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.1'
 
 jobs:
   build:
@@ -26,8 +31,7 @@ jobs:
 
       - name: Get pnpm store directory
         shell: bash
-        run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
         id: pnpm-cache
 
       - name: Setup pnpm cache
@@ -35,8 +39,7 @@ jobs:
         with:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+          restore-keys: ${{ runner.os }}-pnpm-store-
 
       - name: Install dependencies
         run: pnpm install
@@ -44,12 +47,20 @@ jobs:
       - name: Build Next.js app
         run: pnpm build
 
-     - name: Build Electron app
+      - name: Build Electron app
         run: pnpm electron:build --win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WIN_CSC_LINK: ''
           WIN_CSC_KEY_PASSWORD: ''
+
+      - name: List release files
+        shell: bash
+        run: |
+          echo "=== Checking release directory ==="
+          ls -la release/ 2>/dev/null || echo "release/ directory not found"
+          echo "=== All exe files ==="
+          find . -name "*.exe" 2>/dev/null || echo "No exe files found"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -59,12 +70,13 @@ jobs:
             release/*.exe
             release/**/**.exe
           retention-days: 30
-          if-no-files-found: warn
+          if-no-files-found: error
 
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout code
@@ -76,14 +88,24 @@ jobs:
           name: win-exe
           path: release-artifacts
 
-      - name: List files
+      - name: List downloaded files
         run: |
-          echo "## Build Artifacts" >> $GITHUB_STEP_SUMMARY
-          find release-artifacts -type f >> $GITHUB_STEP_SUMMARY
+          echo "=== Downloaded artifacts ==="
+          ls -laR release-artifacts/
+
+      - name: Get tag name
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "TAG=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag.outputs.TAG }}
           files: release-artifacts/**
           generate_release_notes: true
           draft: false
