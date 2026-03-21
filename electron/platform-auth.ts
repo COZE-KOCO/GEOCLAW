@@ -174,10 +174,18 @@ export class PlatformAuthManager {
       return { success: false, error: '不支持的平台' };
     }
 
-    return new Promise((resolve) => {
-      // 创建隔离的session
+    return new Promise(async (resolve) => {
+      // 创建隔离的session（每次登录使用新的session，避免残留Cookie干扰）
       const partition = `persist:${platform}-${Date.now()}`;
       const ses = this.session.fromPartition(partition);
+
+      // 标记是否已解析（防止重复resolve）
+      let resolved = false;
+      // 标记是否已准备好检测登录（等待页面加载完成后才开始检测）
+      let readyToDetect = false;
+      // 记录窗口创建时间，确保最小显示时间
+      const windowCreatedAt = Date.now();
+      const MIN_WINDOW_DISPLAY_TIME = 5000; // 最小显示5秒
 
       const loginWindow = new BrowserWindow({
         width: 500,
@@ -194,33 +202,83 @@ export class PlatformAuthManager {
 
       this.loginWindows.set(platform, loginWindow);
 
-      // 监听Cookie变化
+      // 清除该session的所有Cookie，确保从干净状态开始（必须等待完成）
+      try {
+        await ses.clearStorageData({
+          storages: ['cookies', 'localstorage']
+        });
+        console.log(`[Electron] 已清除 ${platform} 登录session的缓存数据`);
+      } catch (e) {
+        console.warn(`[Electron] 清除缓存数据失败:`, e);
+      }
+
+      // 验证登录成功的函数：必须检测到关键Cookie存在
+      const checkLoginSuccess = async (): Promise<{ success: boolean; cookies: Cookie[] }> => {
+        const cookies = await ses.cookies.get({});
+        // 必须检测到关键认证Cookie
+        const hasAuthCookie = config.cookieKeys.some(key => 
+          cookies.some((c: Cookie) => c.name === key && c.value && c.value.length > 10)
+        );
+        return { success: hasAuthCookie, cookies };
+      };
+
+      // 安全关闭窗口的函数（确保最小显示时间）
+      const safeCloseWindow = async (onClose: () => void) => {
+        const elapsed = Date.now() - windowCreatedAt;
+        const remainingTime = Math.max(0, MIN_WINDOW_DISPLAY_TIME - elapsed);
+        if (remainingTime > 0) {
+          console.log(`[Electron] 等待 ${remainingTime}ms 后关闭窗口`);
+          await new Promise(r => setTimeout(r, remainingTime));
+        }
+        onClose();
+        if (!loginWindow.isDestroyed()) {
+          loginWindow.close();
+        }
+      };
+
+      // 页面加载完成后，延迟3秒再开始检测登录状态（增加延迟时间）
+      loginWindow.webContents.on('did-finish-load', () => {
+        setTimeout(() => {
+          readyToDetect = true;
+          console.log(`[Electron] ${platform} 登录页面加载完成，开始检测登录状态`);
+        }, 3000);
+      });
+
+      // 监听Cookie变化（增加防抖处理）
+      let cookieCheckTimer: NodeJS.Timeout | null = null;
       ses.cookies.on('changed', async (_, cookie, cause, removed) => {
-        if (!removed && cause === 'explicit') {
-          // 检测是否登录成功
-          const cookies = await ses.cookies.get({});
-          const hasAuthCookie = config.cookieKeys.some(key => 
-            cookies.some((c: Cookie) => c.name === key)
-          );
-          
-          if (hasAuthCookie) {
-            // 提取Cookie并通过API保存
-            const account = await this.saveAccountToAPI(platform, cookies, businessId);
-            loginWindow.close();
-            resolve({ success: true, account });
-          }
+        if (resolved) return; // 已处理，忽略
+        
+        if (!removed && cause === 'explicit' && readyToDetect) {
+          // 防抖：延迟500ms后再检查，避免频繁触发
+          if (cookieCheckTimer) clearTimeout(cookieCheckTimer);
+          cookieCheckTimer = setTimeout(async () => {
+            if (resolved) return;
+            const result = await checkLoginSuccess();
+            if (result.success) {
+              console.log(`[Electron] 检测到 ${platform} 登录成功的Cookie`);
+              resolved = true;
+              const account = await this.saveAccountToAPI(platform, result.cookies, businessId);
+              await safeCloseWindow(() => resolve({ success: true, account }));
+            }
+          }, 500);
         }
       });
 
-      // 监听URL变化
+      // 监听URL变化（必须验证关键Cookie）
       loginWindow.webContents.on('did-navigate', async (_, url) => {
+        if (resolved) return; // 已处理，忽略
+        
         // 检测是否登录成功（通过URL判断）
-        if (url.includes(config.loginSuccessUrl)) {
-          const cookies = await ses.cookies.get({});
-          if (cookies.length > 0) {
-            const account = await this.saveAccountToAPI(platform, cookies, businessId);
-            loginWindow.close();
-            resolve({ success: true, account });
+        if (readyToDetect && url.includes(config.loginSuccessUrl)) {
+          console.log(`[Electron] 检测到 ${platform} 登录成功的URL: ${url}`);
+          // 延迟1秒后再检查Cookie，确保Cookie已写入
+          await new Promise(r => setTimeout(r, 1000));
+          const result = await checkLoginSuccess();
+          if (result.success) {
+            resolved = true;
+            const account = await this.saveAccountToAPI(platform, result.cookies, businessId);
+            await safeCloseWindow(() => resolve({ success: true, account }));
           }
         }
       });
@@ -231,7 +289,9 @@ export class PlatformAuthManager {
       // 窗口关闭处理
       loginWindow.on('closed', () => {
         this.loginWindows.delete(platform);
-        resolve({ success: false, error: '登录已取消' });
+        if (!resolved) {
+          resolve({ success: false, error: '登录已取消' });
+        }
       });
     });
   }
@@ -272,6 +332,7 @@ export class PlatformAuthManager {
         }),
       });
     } catch (e) {
+      console.error('保存账号到服务器失败:', e);
       console.error('保存账号到服务器失败:', e);
     }
 
