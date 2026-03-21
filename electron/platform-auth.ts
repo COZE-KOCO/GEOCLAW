@@ -1,60 +1,77 @@
-import { BrowserWindow, session, Session, Cookie, app } from 'electron';
+import { BrowserWindow, session, Session, Cookie, app, ipcMain } from 'electron';
 import * as crypto from 'crypto';
 import * as https from 'https';
 import * as http from 'http';
 import * as path from 'path';
 import * as fs from 'fs';
 
-// 平台登录配置
+// 平台登录配置 - 修正后的配置
 const PLATFORM_CONFIG = {
   wechat: {
     name: '微信公众号',
     loginUrl: 'https://mp.weixin.qq.com',
     loginSuccessUrl: 'mp.weixin.qq.com/cgi-bin/home',
+    loginSuccessText: '首页', // 页面中出现的成功标识文字
     iconUrl: 'https://img.icons8.com/color/48/weixin.png',
-    cookieKeys: ['slave_sid', 'slave_user', 'wxtoken1', 'token'],
+    cookieKeys: ['slave_sid', 'slave_user', 'wxtoken1', 'token', 'data_ticket'],
+    requireManualConfirm: false,
   },
   zhihu: {
     name: '知乎',
     loginUrl: 'https://www.zhihu.com/signin',
     loginSuccessUrl: 'zhihu.com/',
+    loginSuccessText: '关注',
     iconUrl: 'https://img.icons8.com/color/48/zhihu.png',
-    cookieKeys: ['z_c0', '_zap', 'd_c0'],
+    cookieKeys: ['z_c0', '_zap', 'd_c0', 'q_c1'],
+    requireManualConfirm: false,
   },
   weibo: {
     name: '微博',
-    loginUrl: 'https://weibo.com/login.php',
-    loginSuccessUrl: 'weibo.com/u/',
+    // 使用新版微博登录页面
+    loginUrl: 'https://weibo.com/newlogin',
+    loginSuccessUrl: 'weibo.com/',
+    loginSuccessText: '首页',
     iconUrl: 'https://img.icons8.com/color/48/weibo.png',
-    cookieKeys: ['SUB', 'SUBP', 'ALF'],
+    cookieKeys: ['SUB', 'SUBP', 'ALF', 'SINAGLOBAL'],
+    requireManualConfirm: true, // 微博需要手动确认
   },
   toutiao: {
     name: '今日头条',
     loginUrl: 'https://mp.toutiao.com/auth/page/login',
     loginSuccessUrl: 'mp.toutiao.com/',
+    loginSuccessText: '创作',
     iconUrl: 'https://img.icons8.com/color/48/toutiao.png',
-    cookieKeys: ['sessionid', 'tt_webid', 'tt_csrf_token'],
+    cookieKeys: ['sessionid', 'tt_webid', 'tt_csrf_token', 'ttwid', 'sso_uid_tt'],
+    requireManualConfirm: true, // 头条需要手动确认
   },
   bilibili: {
     name: 'B站',
     loginUrl: 'https://passport.bilibili.com/login',
     loginSuccessUrl: 'bilibili.com/',
+    loginSuccessText: '动态',
     iconUrl: 'https://img.icons8.com/color/48/bilibili.png',
-    cookieKeys: ['SESSDATA', 'bili_jct', 'DedeUserID'],
+    cookieKeys: ['SESSDATA', 'bili_jct', 'DedeUserID', 'DedeUserID__ckMd5'],
+    requireManualConfirm: false,
   },
   xiaohongshu: {
     name: '小红书',
     loginUrl: 'https://creator.xiaohongshu.com/login',
     loginSuccessUrl: 'creator.xiaohongshu.com/',
+    loginSuccessText: '发布',
     iconUrl: 'https://img.icons8.com/color/48/xiaohongshu.png',
-    cookieKeys: ['web_session', 'webId', 'a1'],
+    cookieKeys: ['web_session', 'webId', 'a1', 'websec_token'],
+    requireManualConfirm: true, // 小红书需要手动确认
   },
   douyin: {
     name: '抖音',
-    loginUrl: 'https://creator.douyin.com/',
+    // 使用正确的登录页面，而不是首页
+    loginUrl: 'https://creator.douyin.com/login',
     loginSuccessUrl: 'creator.douyin.com/creator-micro',
+    loginSuccessText: '发布',
     iconUrl: 'https://img.icons8.com/color/48/tiktok.png',
-    cookieKeys: ['sessionid', 'passport_csrf_token', 'ttwid'],
+    // 抖音首页的ttwid不是登录态，需要sessionid才是真正的登录
+    cookieKeys: ['sessionid', 'passport_csrf_token', 'sid_guard', 'uid_tt'],
+    requireManualConfirm: true, // 抖音需要手动确认
   },
 };
 
@@ -80,6 +97,7 @@ export class PlatformAuthManager {
   private apiBaseUrl: string;
   private loginWindows: Map<string, BrowserWindow> = new Map();
   private config: AppConfig;
+  private loginResolvers: Map<string, (result: { success: boolean; account?: SavedAccount; error?: string }) => void> = new Map();
 
   constructor(mainWindow: BrowserWindow, sessionModule: typeof session) {
     this.mainWindow = mainWindow;
@@ -90,6 +108,54 @@ export class PlatformAuthManager {
     this.apiBaseUrl = this.config.apiBaseUrl;
     
     console.log('[Electron] API地址:', this.apiBaseUrl);
+    
+    // 注册手动确认登录的IPC处理器
+    this.registerManualConfirmHandler();
+  }
+
+  // 注册手动确认处理器
+  private registerManualConfirmHandler() {
+    ipcMain.handle('manual-confirm-login', async (_, platform: string) => {
+      console.log(`[Electron] 收到 ${platform} 的手动确认登录请求`);
+      const loginWindow = this.loginWindows.get(platform);
+      if (!loginWindow || loginWindow.isDestroyed()) {
+        return { success: false, error: '登录窗口已关闭' };
+      }
+      
+      // 获取窗口的session
+      const ses = loginWindow.webContents.session;
+      const config = PLATFORM_CONFIG[platform as keyof typeof PLATFORM_CONFIG];
+      
+      // 获取所有Cookie
+      const cookies = await ses.cookies.get({});
+      console.log(`[Electron] ${platform} 当前Cookie数量: ${cookies.length}`);
+      
+      // 检查是否有足够的Cookie（至少5个，因为登录后通常会有很多Cookie）
+      if (cookies.length < 5) {
+        return { success: false, error: '未检测到登录信息，请先完成登录' };
+      }
+      
+      // 用户已手动确认，直接保存账号
+      const businessId = await this.getCurrentBusinessId();
+      const account = await this.saveAccountToAPI(platform, cookies, businessId);
+      
+      // 关闭窗口
+      const resolver = this.loginResolvers.get(platform);
+      if (resolver) {
+        resolver({ success: true, account });
+        this.loginResolvers.delete(platform);
+      }
+      
+      loginWindow.close();
+      return { success: true, account };
+    });
+  }
+
+  // 获取当前businessId
+  private currentBusinessId: string = 'default';
+  
+  private async getCurrentBusinessId(): Promise<string> {
+    return this.currentBusinessId;
   }
 
   // 加载配置（支持多种方式）
@@ -140,9 +206,6 @@ export class PlatformAuthManager {
 
   // 获取配置文件路径
   private getConfigPath(): string {
-    // macOS: ~/Library/Application Support/geo-optimizer/config.json
-    // Windows: %APPDATA%/geo-optimizer/config.json
-    // Linux: ~/.config/geo-optimizer/config.json
     const userDataPath = app.getPath('userData');
     return path.join(userDataPath, 'config.json');
   }
@@ -167,136 +230,212 @@ export class PlatformAuthManager {
     );
   }
 
-  // 打开登录窗口
+  // 打开登录窗口 - 重写版本
   async openLoginWindow(platform: string, businessId: string): Promise<{ success: boolean; account?: SavedAccount; error?: string }> {
     const config = PLATFORM_CONFIG[platform as keyof typeof PLATFORM_CONFIG];
     if (!config) {
       return { success: false, error: '不支持的平台' };
     }
 
+    this.currentBusinessId = businessId;
+
     return new Promise(async (resolve) => {
-      // 创建隔离的session（每次登录使用新的session，避免残留Cookie干扰）
+      // 创建隔离的session
       const partition = `persist:${platform}-${Date.now()}`;
       const ses = this.session.fromPartition(partition);
 
-      // 标记是否已解析（防止重复resolve）
+      // 标记是否已解析
       let resolved = false;
-      // 标记是否已准备好检测登录（等待页面加载完成后才开始检测）
-      let readyToDetect = false;
-      // 记录窗口创建时间，确保最小显示时间
+      // 记录窗口创建时间
       const windowCreatedAt = Date.now();
-      const MIN_WINDOW_DISPLAY_TIME = 5000; // 最小显示5秒
+
+      // 存储resolver以便手动确认时使用
+      this.loginResolvers.set(platform, resolve);
 
       const loginWindow = new BrowserWindow({
-        width: 500,
-        height: 700,
+        width: 600,
+        height: 800,
         parent: this.mainWindow,
-        modal: true,
+        modal: false, // 改为非模态，方便用户操作
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
           session: ses,
         },
-        title: `登录 ${config.name}`,
+        title: `登录 ${config.name} - 登录成功后请点击下方确认按钮`,
       });
 
       this.loginWindows.set(platform, loginWindow);
 
-      // 清除该session的所有Cookie，确保从干净状态开始（必须等待完成）
+      // 清除该session的所有数据
       try {
         await ses.clearStorageData({
-          storages: ['cookies', 'localstorage']
+          storages: ['cookies', 'localstorage', 'indexdb', 'serviceworkers']
         });
         console.log(`[Electron] 已清除 ${platform} 登录session的缓存数据`);
       } catch (e) {
         console.warn(`[Electron] 清除缓存数据失败:`, e);
       }
 
-      // 验证登录成功的函数：必须检测到关键Cookie存在
-      const checkLoginSuccess = async (): Promise<{ success: boolean; cookies: Cookie[] }> => {
+      // 注入手动确认按钮的脚本（在每个页面加载后执行）
+      loginWindow.webContents.on('did-finish-load', () => {
+        loginWindow.webContents.executeJavaScript(`
+          (function() {
+            // 移除旧的确认按钮（如果存在）
+            const oldBtn = document.getElementById('electron-login-confirm');
+            if (oldBtn) oldBtn.remove();
+            
+            const oldContainer = document.getElementById('electron-login-container');
+            if (oldContainer) oldContainer.remove();
+            
+            // 创建悬浮容器
+            const container = document.createElement('div');
+            container.id = 'electron-login-container';
+            container.style.cssText = \`
+              position: fixed;
+              bottom: 20px;
+              left: 50%;
+              transform: translateX(-50%);
+              z-index: 999999;
+              display: flex;
+              gap: 10px;
+              align-items: center;
+              background: rgba(0, 0, 0, 0.85);
+              padding: 12px 24px;
+              border-radius: 30px;
+              box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            \`;
+            
+            // 提示文字
+            const tip = document.createElement('span');
+            tip.style.cssText = \`
+              color: #fff;
+              font-size: 14px;
+              white-space: nowrap;
+            \`;
+            tip.textContent = '登录成功后请点击';
+            
+            // 确认按钮
+            const btn = document.createElement('button');
+            btn.id = 'electron-login-confirm';
+            btn.textContent = '确认登录成功';
+            btn.style.cssText = \`
+              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+              color: white;
+              border: none;
+              padding: 10px 24px;
+              border-radius: 20px;
+              font-size: 14px;
+              font-weight: 600;
+              cursor: pointer;
+              white-space: nowrap;
+              transition: all 0.3s ease;
+            \`;
+            btn.onmouseover = function() {
+              this.style.transform = 'scale(1.05)';
+              this.style.boxShadow = '0 4px 15px rgba(102, 126, 234, 0.4)';
+            };
+            btn.onmouseout = function() {
+              this.style.transform = 'scale(1)';
+              this.style.boxShadow = 'none';
+            };
+            
+            container.appendChild(tip);
+            container.appendChild(btn);
+            document.body.appendChild(container);
+            
+            // 点击事件
+            btn.onclick = function() {
+              this.textContent = '处理中...';
+              this.disabled = true;
+              window.electronAPI?.manualConfirmLogin('${platform}');
+            };
+            
+            console.log('已注入登录确认按钮');
+          })();
+        `).catch(err => console.log('注入脚本失败:', err));
+      });
+
+      // 自动检测登录成功（辅助功能）
+      const checkLoginSuccess = async (): Promise<{ success: boolean; cookies: Cookie[]; reason: string }> => {
         const cookies = await ses.cookies.get({});
-        // 必须检测到关键认证Cookie
-        const hasAuthCookie = config.cookieKeys.some(key => 
+        
+        // 检查关键Cookie
+        const foundKeys = config.cookieKeys.filter(key => 
           cookies.some((c: Cookie) => c.name === key && c.value && c.value.length > 10)
         );
-        return { success: hasAuthCookie, cookies };
-      };
-
-      // 安全关闭窗口的函数（确保最小显示时间）
-      const safeCloseWindow = async (onClose: () => void) => {
-        const elapsed = Date.now() - windowCreatedAt;
-        const remainingTime = Math.max(0, MIN_WINDOW_DISPLAY_TIME - elapsed);
-        if (remainingTime > 0) {
-          console.log(`[Electron] 等待 ${remainingTime}ms 后关闭窗口`);
-          await new Promise(r => setTimeout(r, remainingTime));
-        }
-        onClose();
-        if (!loginWindow.isDestroyed()) {
-          loginWindow.close();
-        }
-      };
-
-      // 页面加载完成后，延迟3秒再开始检测登录状态（增加延迟时间）
-      loginWindow.webContents.on('did-finish-load', () => {
-        setTimeout(() => {
-          readyToDetect = true;
-          console.log(`[Electron] ${platform} 登录页面加载完成，开始检测登录状态`);
-        }, 3000);
-      });
-
-      // 监听Cookie变化（增加防抖处理）
-      let cookieCheckTimer: NodeJS.Timeout | null = null;
-      ses.cookies.on('changed', async (_, cookie, cause, removed) => {
-        if (resolved) return; // 已处理，忽略
         
-        if (!removed && cause === 'explicit' && readyToDetect) {
-          // 防抖：延迟500ms后再检查，避免频繁触发
-          if (cookieCheckTimer) clearTimeout(cookieCheckTimer);
-          cookieCheckTimer = setTimeout(async () => {
-            if (resolved) return;
-            const result = await checkLoginSuccess();
-            if (result.success) {
-              console.log(`[Electron] 检测到 ${platform} 登录成功的Cookie`);
-              resolved = true;
-              const account = await this.saveAccountToAPI(platform, result.cookies, businessId);
-              await safeCloseWindow(() => resolve({ success: true, account }));
-            }
-          }, 500);
+        if (foundKeys.length >= 2) {
+          return { success: true, cookies, reason: `检测到关键Cookie: ${foundKeys.join(', ')}` };
         }
-      });
+        
+        return { success: false, cookies: [], reason: `关键Cookie不足，已找到: ${foundKeys.join(', ') || '无'}` };
+      };
 
-      // 监听URL变化（必须验证关键Cookie）
+      // URL变化检测
       loginWindow.webContents.on('did-navigate', async (_, url) => {
-        if (resolved) return; // 已处理，忽略
+        if (resolved) return;
         
-        // 检测是否登录成功（通过URL判断）
-        if (readyToDetect && url.includes(config.loginSuccessUrl)) {
-          console.log(`[Electron] 检测到 ${platform} 登录成功的URL: ${url}`);
-          // 延迟1秒后再检查Cookie，确保Cookie已写入
-          await new Promise(r => setTimeout(r, 1000));
+        console.log(`[Electron] ${platform} 页面导航到: ${url}`);
+        
+        // 检测是否到达登录成功页面
+        if (url.includes(config.loginSuccessUrl)) {
+          console.log(`[Electron] ${platform} 到达登录成功页面`);
+          
+          // 延迟2秒后检查Cookie（给页面时间写入Cookie）
+          await new Promise(r => setTimeout(r, 2000));
+          
           const result = await checkLoginSuccess();
-          if (result.success) {
+          console.log(`[Electron] ${platform} Cookie检查结果:`, result.reason);
+          
+          // 如果自动检测成功且不需要手动确认
+          if (result.success && !config.requireManualConfirm) {
             resolved = true;
             const account = await this.saveAccountToAPI(platform, result.cookies, businessId);
-            await safeCloseWindow(() => resolve({ success: true, account }));
+            this.loginResolvers.delete(platform);
+            loginWindow.close();
+            resolve({ success: true, account });
           }
         }
       });
 
+      // 监听页面标题变化（辅助检测）
+      loginWindow.on('page-title-updated', (_, title) => {
+        console.log(`[Electron] ${platform} 页面标题: ${title}`);
+      });
+
       // 加载登录页面
-      loginWindow.loadURL(config.loginUrl);
+      console.log(`[Electron] 加载 ${platform} 登录页面: ${config.loginUrl}`);
+      loginWindow.loadURL(config.loginUrl).catch(err => {
+        console.error(`[Electron] 加载登录页面失败:`, err);
+        // 尝试备用URL
+        if (platform === 'weibo') {
+          loginWindow.loadURL('https://login.sina.com.cn/signup/signin.php');
+        }
+      });
 
       // 窗口关闭处理
       loginWindow.on('closed', () => {
         this.loginWindows.delete(platform);
         if (!resolved) {
+          this.loginResolvers.delete(platform);
           resolve({ success: false, error: '登录已取消' });
+        }
+      });
+
+      // 页面加载错误处理
+      loginWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+        console.error(`[Electron] ${platform} 页面加载失败:`, errorCode, errorDescription);
+        if (errorCode === -3) { // ERR_ABORTED
+          // 忽略，通常是重定向
+          return;
         }
       });
     });
   }
 
-  // 通过API保存账号（数据存储在服务器数据库，与Web版共享）
+  // 通过API保存账号
   private async saveAccountToAPI(
     platform: string, 
     cookies: Cookie[],
@@ -310,17 +449,26 @@ export class PlatformAuthManager {
       cookieObj[c.name] = c.value;
     });
 
+    // 尝试获取用户信息
+    const userInfo = await this.fetchUserInfo(platform, cookieObj);
+    
     const accountId = crypto.randomUUID();
+    const displayName = userInfo.name || `${config.name}用户`;
     
     // 调用API保存账号
     const accountData = {
       id: accountId,
       businessId: businessId,
       platform: platform,
-      accountName: `${config.name}用户`,
-      displayName: `${config.name}用户`,
+      accountName: displayName,
+      displayName: displayName,
       platformName: config.name,
       cookies: cookieObj,
+      avatar: userInfo.avatar,
+      metadata: {
+        platformData: cookieObj,
+        loginTime: new Date().toISOString(),
+      },
     };
 
     try {
@@ -331,8 +479,8 @@ export class PlatformAuthManager {
           data: accountData,
         }),
       });
+      console.log(`[Electron] ${platform} 账号已保存到服务器`);
     } catch (e) {
-      console.error('保存账号到服务器失败:', e);
       console.error('保存账号到服务器失败:', e);
     }
 
@@ -340,26 +488,101 @@ export class PlatformAuthManager {
       id: accountId,
       platform,
       platformName: config.name,
-      name: `${config.name}用户`,
+      name: displayName,
+      avatar: userInfo.avatar,
       cookies: cookieObj,
       createdAt: Date.now(),
       lastUsed: Date.now(),
     };
 
     // 通知主窗口更新
-    this.mainWindow.webContents.send('account-updated', account);
+    if (!this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send('account-updated', account);
+    }
 
     return account;
   }
 
-  // 通过API获取账号列表（与Web版共享）
+  // 获取用户信息（根据平台不同）
+  private async fetchUserInfo(platform: string, cookies: Record<string, string>): Promise<{ name?: string; avatar?: string }> {
+    // 各平台的用户信息接口
+    const userApis: Record<string, { url: string; method: string; headers: Record<string, string> }> = {
+      xiaohongshu: {
+        url: 'https://creator.xiaohongshu.com/api/user/info',
+        method: 'GET',
+        headers: { 'Cookie': Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ') }
+      },
+      // 可以添加其他平台的API
+    };
+
+    const apiConfig = userApis[platform];
+    if (!apiConfig) {
+      return {};
+    }
+
+    try {
+      const data = await this.callAPIWithHeaders(apiConfig.url, {
+        method: apiConfig.method,
+        headers: apiConfig.headers,
+      });
+      
+      // 解析用户信息（根据各平台API格式）
+      if (platform === 'xiaohongshu' && data?.data?.user) {
+        return {
+          name: data.data.user.name || data.data.user.nickname,
+          avatar: data.data.user.image,
+        };
+      }
+    } catch (e) {
+      console.log(`[Electron] 获取 ${platform} 用户信息失败:`, e);
+    }
+
+    return {};
+  }
+
+  // 带自定义headers的API调用
+  private callAPIWithHeaders(url: string, options: { method: string; headers: Record<string, string> }): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const urlObj = new URL(url);
+      const isHttps = urlObj.protocol === 'https:';
+      const lib = isHttps ? https : http;
+      
+      const reqOptions = {
+        hostname: urlObj.hostname,
+        port: urlObj.port || (isHttps ? 443 : 80),
+        path: urlObj.pathname + urlObj.search,
+        method: options.method,
+        headers: options.headers,
+      };
+
+      const req = lib.request(reqOptions, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            resolve({ raw: data });
+          }
+        });
+      });
+
+      req.on('error', reject);
+      req.setTimeout(10000, () => {
+        req.destroy();
+        reject(new Error('请求超时'));
+      });
+      req.end();
+    });
+  }
+
+  // 通过API获取账号列表
   async getSavedAccounts(businessId: string): Promise<Record<string, SavedAccount[]>> {
     try {
       const data = await this.callAPI(`/api/accounts?businessId=${businessId}`, {
         method: 'GET',
       });
       
-      // 将API返回的账号列表按平台分组
       const accountsByPlatform: Record<string, SavedAccount[]> = {};
       (data.accounts || []).forEach((acc: any) => {
         if (!accountsByPlatform[acc.platform]) {
@@ -433,6 +656,10 @@ export class PlatformAuthManager {
       });
 
       req.on('error', reject);
+      req.setTimeout(15000, () => {
+        req.destroy();
+        reject(new Error('请求超时'));
+      });
       
       if (options.body) {
         req.write(options.body);

@@ -57,6 +57,11 @@ const electronAPI = {
     };
   },
 
+  // 手动确认登录成功（在登录窗口中调用）
+  manualConfirmLogin: (platform: string): Promise<{ success: boolean; account?: any; error?: string }> => {
+    return ipcRenderer.invoke('manual-confirm-login', platform);
+  },
+
   // 平台配置
   platforms: {
     wechat: { name: '微信公众号', iconUrl: 'https://img.icons8.com/color/48/weixin.png' },
@@ -121,6 +126,189 @@ const electronAPI = {
     ipcRenderer.on('update-error', (_, error) => callback(error));
     return () => {
       ipcRenderer.removeListener('update-error', callback as any);
+    };
+  },
+
+  // ====== 发布任务调度器相关 ======
+
+  // 获取调度器状态
+  getSchedulerStatus: (): Promise<{
+    isRunning: boolean;
+    currentTask: {
+      taskId: string;
+      taskName: string;
+      status: string;
+      progress: number;
+      results: any[];
+    } | null;
+  }> => {
+    return ipcRenderer.invoke('scheduler-status');
+  },
+
+  // 手动触发检查
+  triggerSchedulerCheck: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('scheduler-trigger');
+  },
+
+  // 启停调度器
+  toggleScheduler: (enable: boolean): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('scheduler-toggle', enable);
+  },
+
+  // 监听调度器状态变化
+  onSchedulerStatus: (callback: (status: { status: string; checkInterval?: number }) => void) => {
+    ipcRenderer.on('scheduler-status', (_, status) => callback(status));
+    return () => {
+      ipcRenderer.removeListener('scheduler-status', callback as any);
+    };
+  },
+
+  // 监听调度器检查
+  onSchedulerChecking: (callback: (data: { time: string }) => void) => {
+    ipcRenderer.on('scheduler-checking', (_, data) => callback(data));
+    return () => {
+      ipcRenderer.removeListener('scheduler-checking', callback as any);
+    };
+  },
+
+  // 监听待执行任务
+  onPendingTasks: (callback: (data: { count: number; tasks: any[] }) => void) => {
+    ipcRenderer.on('pending-tasks', (_, data) => callback(data));
+    return () => {
+      ipcRenderer.removeListener('pending-tasks', callback as any);
+    };
+  },
+
+  // 监听任务开始
+  onTaskStarted: (callback: (data: {
+    taskId: string;
+    taskName: string;
+    title: string;
+    targetPlatforms: any[];
+  }) => void) => {
+    ipcRenderer.on('task-started', (_, data) => callback(data));
+    return () => {
+      ipcRenderer.removeListener('task-started', callback as any);
+    };
+  },
+
+  // 监听任务完成
+  onTaskCompleted: (callback: (data: {
+    taskId: string;
+    taskName: string;
+    success: boolean;
+    results: any[];
+    completedAt: string;
+  }) => void) => {
+    ipcRenderer.on('task-completed', (_, data) => callback(data));
+    return () => {
+      ipcRenderer.removeListener('task-completed', callback as any);
+    };
+  },
+
+  // 监听任务失败
+  onTaskFailed: (callback: (data: {
+    taskId: string;
+    taskName: string;
+    error: string;
+  }) => void) => {
+    ipcRenderer.on('task-failed', (_, data) => callback(data));
+    return () => {
+      ipcRenderer.removeListener('task-failed', callback as any);
+    };
+  },
+
+  // 监听调度器错误
+  onSchedulerError: (callback: (data: { error: string }) => void) => {
+    ipcRenderer.on('scheduler-error', (_, data) => callback(data));
+    return () => {
+      ipcRenderer.removeListener('scheduler-error', callback as any);
+    };
+  },
+
+  // ====== 创作调度器相关 ======
+
+  // 获取创作调度器状态
+  getCreationSchedulerStatus: (): Promise<{
+    isRunning: boolean;
+    currentProgress: {
+      planId: string;
+      planName: string;
+      status: string;
+      progress: number;
+      createdCount: number;
+      totalCount: number;
+    } | null;
+  }> => {
+    return ipcRenderer.invoke('creation-scheduler-status');
+  },
+
+  // 手动触发创作检查
+  triggerCreationSchedulerCheck: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('creation-scheduler-trigger');
+  },
+
+  // 启停创作调度器
+  toggleCreationScheduler: (enable: boolean): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('creation-scheduler-toggle', enable);
+  },
+
+  // 监听创作调度器状态变化
+  onCreationSchedulerStatus: (callback: (status: { status: string; checkInterval?: number }) => void) => {
+    ipcRenderer.on('creation-scheduler-status', (_, status) => callback(status));
+    return () => {
+      ipcRenderer.removeListener('creation-scheduler-status', callback as any);
+    };
+  },
+
+  // 监听创作计划开始
+  onCreationPlanStarted: (callback: (data: {
+    planId: string;
+    planName: string;
+    totalCount: number;
+  }) => void) => {
+    ipcRenderer.on('creation-plan-started', (_, data) => callback(data));
+    return () => {
+      ipcRenderer.removeListener('creation-plan-started', callback as any);
+    };
+  },
+
+  // 监听创作任务进度
+  onCreationTaskProgress: (callback: (data: {
+    planId: string;
+    current: number;
+    total: number;
+    keyword: string;
+  }) => void) => {
+    ipcRenderer.on('creation-task-progress', (_, data) => callback(data));
+    return () => {
+      ipcRenderer.removeListener('creation-task-progress', callback as any);
+    };
+  },
+
+  // 监听创作计划完成
+  onCreationPlanCompleted: (callback: (data: {
+    planId: string;
+    planName: string;
+    createdCount: number;
+    totalCount: number;
+    completedAt: string;
+  }) => void) => {
+    ipcRenderer.on('creation-plan-completed', (_, data) => callback(data));
+    return () => {
+      ipcRenderer.removeListener('creation-plan-completed', callback as any);
+    };
+  },
+
+  // 监听创作计划失败
+  onCreationPlanFailed: (callback: (data: {
+    planId: string;
+    planName: string;
+    error: string;
+  }) => void) => {
+    ipcRenderer.on('creation-plan-failed', (_, data) => callback(data));
+    return () => {
+      ipcRenderer.removeListener('creation-plan-failed', callback as any);
     };
   },
 };
