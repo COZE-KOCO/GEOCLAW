@@ -23,6 +23,9 @@ export type ArticleType = 'what' | 'how' | 'top' | 'normal';
 /** 排名显示方式 */
 export type RankingDisplay = 'random' | 'sequential' | 'reverse' | 'grouped';
 
+/** 图片来源 */
+export type ImageSource = 'stock' | 'ai' | 'upload' | 'none';
+
 // ==================== 子配置类型 ====================
 
 /** 全文替换规则 */
@@ -87,11 +90,11 @@ export interface GenerationConfig {
   
   // ========== 创作类型 ==========
   
-  /** 文章类型 */
-  articleType: ArticleType;
-  
-  /** 文章类型占比（0-100） */
-  articleTypeRatio: number;
+  /**
+   * 文章类型分布（批量创作时使用）
+   * 各类型占比总和应为 100
+   */
+  articleTypeDistribution: ArticleTypeDistribution;
   
   // ========== TOP排行设置 ==========
   
@@ -108,6 +111,12 @@ export interface GenerationConfig {
   competitors: string;
   
   // ========== 图片设置 ==========
+  
+  /** 图片来源 */
+  imageSource: ImageSource;
+  
+  /** 素材库过滤类型 */
+  imageFilter: string;
   
   /** 启用缩略图 */
   enableThumbnail: boolean;
@@ -266,9 +275,13 @@ export const defaultGenerationConfig: GenerationConfig = {
   // 描述设置
   description: '',
   
-  // 创作类型
-  articleType: 'normal',
-  articleTypeRatio: 100,
+  // 创作类型 - 文章类型分布
+  articleTypeDistribution: {
+    what: 0,
+    how: 0,
+    top: 0,
+    normal: 100,
+  },
   
   // TOP排行设置
   productName: '',
@@ -277,6 +290,8 @@ export const defaultGenerationConfig: GenerationConfig = {
   competitors: '',
   
   // 图片设置
+  imageSource: 'stock',
+  imageFilter: 'all',
   enableThumbnail: true,
   enableContentImages: false,
   imageCount: 3,

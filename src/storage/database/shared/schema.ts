@@ -409,3 +409,221 @@ export const geoAnalysisResults = pgTable(
     index("geo_analysis_results_cited_idx").on(table.cited),
   ]
 );
+
+// ==================== 创作计划表 ====================
+export const creationPlans = pgTable(
+  "creation_plans",
+  {
+    id: varchar({ length: 36 }).default(sql`gen_random_uuid()`).primaryKey().notNull(),
+    businessId: varchar("business_id", { length: 36 }).notNull(),
+    
+    // 计划基本信息
+    planName: varchar("plan_name", { length: 200 }).notNull(),
+    status: varchar({ length: 20 }).default('active').notNull(), // active, paused, completed, cancelled
+    
+    // 创作频率配置
+    frequency: varchar({ length: 20 }).default('daily').notNull(), // daily, weekly, monthly, hourly
+    articlesPerRun: integer("articles_per_run").default(1).notNull(),
+    scheduledTime: varchar("scheduled_time", { length: 10 }), // HH:mm 格式
+    scheduledDays: jsonb("scheduled_days").default([]), // 周几执行 [0-6]
+    scheduledDates: jsonb("scheduled_dates").default([]), // 每月哪天执行 [1-31]
+    
+    // 创作内容配置 - 使用 jsonb 存储完整的 GenerationConfig
+    contentConfig: jsonb("content_config").default({}).notNull(),
+    
+    // 发布配置
+    publishConfig: jsonb("publish_config").default({}).notNull(),
+    // { autoPublish, publishDelay, targetPlatforms, publishStrategy, publishTimeSlots }
+    
+    // 运行统计
+    totalCreated: integer("total_created").default(0).notNull(),
+    totalPublished: integer("total_published").default(0).notNull(),
+    successRate: decimal("success_rate", { precision: 5, scale: 2 }).default('0'),
+    lastRunAt: timestamp("last_run_at", { withTimezone: true, mode: 'string' }),
+    nextRunAt: timestamp("next_run_at", { withTimezone: true, mode: 'string' }),
+    
+    // 时间范围
+    startDate: timestamp("start_date", { withTimezone: true, mode: 'string' }),
+    endDate: timestamp("end_date", { withTimezone: true, mode: 'string' }),
+    
+    // 关键词进度追踪
+    lastKeywordIndex: integer("last_keyword_index").default(0),  // 上次执行到第几个关键词
+    
+    createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+  },
+  (table) => [
+    index("creation_plans_business_id_idx").on(table.businessId),
+    index("creation_plans_status_idx").on(table.status),
+    index("creation_plans_frequency_idx").on(table.frequency),
+    index("creation_plans_next_run_at_idx").on(table.nextRunAt),
+  ]
+);
+
+// ==================== 创作任务表 ====================
+export const creationTasks = pgTable(
+  "creation_tasks",
+  {
+    id: varchar({ length: 36 }).default(sql`gen_random_uuid()`).primaryKey().notNull(),
+    planId: varchar("plan_id", { length: 36 }).notNull(),
+    businessId: varchar("business_id", { length: 36 }).notNull(),
+    
+    // 任务状态
+    status: varchar({ length: 20 }).default('pending').notNull(), // pending, processing, completed, failed, cancelled
+    priority: integer().default(5).notNull(), // 1-10, 1最高优先级
+    
+    // 创作参数 - 存储 GenerationConfig 的子集
+    params: jsonb("params").default({}).notNull(),
+    // { generateMethod, keyword, keywords, keywordLibraryId, articleType, ruleConfig }
+    
+    // 生成结果
+    result: jsonb("result"),
+    // { draftId, title, content, seoScore, keywords }
+    
+    // 发布任务关联
+    publishTaskId: varchar("publish_task_id", { length: 36 }),
+    
+    // 执行信息
+    scheduledAt: timestamp("scheduled_at", { withTimezone: true, mode: 'string' }).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true, mode: 'string' }),
+    completedAt: timestamp("completed_at", { withTimezone: true, mode: 'string' }),
+    error: text("error"),
+    
+    // 重试
+    retryCount: integer("retry_count").default(0).notNull(),
+    maxRetries: integer("max_retries").default(3).notNull(),
+    
+    // 元数据
+    metadata: jsonb("metadata").default({}),
+    
+    createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+  },
+  (table) => [
+    index("creation_tasks_plan_id_idx").on(table.planId),
+    index("creation_tasks_business_id_idx").on(table.businessId),
+    index("creation_tasks_status_idx").on(table.status),
+    index("creation_tasks_scheduled_at_idx").on(table.scheduledAt),
+    index("creation_tasks_publish_task_id_idx").on(table.publishTaskId),
+  ]
+);
+
+// ==================== 素材文件夹表 ====================
+export const assetFolders = pgTable(
+  "asset_folders",
+  {
+    id: varchar({ length: 36 }).default(sql`gen_random_uuid()`).primaryKey().notNull(),
+    businessId: varchar("business_id", { length: 36 }).notNull(),
+    
+    // 文件夹信息
+    name: varchar({ length: 200 }).notNull(),
+    parentId: varchar("parent_id", { length: 36 }), // 父文件夹ID，支持嵌套
+    
+    // 元数据
+    color: varchar({ length: 20 }), // 文件夹颜色标识
+    icon: varchar({ length: 50 }), // 图标
+    
+    createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+  },
+  (table) => [
+    index("asset_folders_business_id_idx").on(table.businessId),
+    index("asset_folders_parent_id_idx").on(table.parentId),
+  ]
+);
+
+// ==================== 素材文件表 ====================
+export const assets = pgTable(
+  "assets",
+  {
+    id: varchar({ length: 36 }).default(sql`gen_random_uuid()`).primaryKey().notNull(),
+    businessId: varchar("business_id", { length: 36 }).notNull(),
+    folderId: varchar("folder_id", { length: 36 }),
+    
+    // 文件信息
+    name: varchar({ length: 500 }).notNull(),
+    originalName: varchar("original_name", { length: 500 }), // 原始文件名
+    type: varchar({ length: 20 }).notNull(), // image, video, audio, document
+    mimeType: varchar("mime_type", { length: 100 }),
+    size: integer().notNull(), // 文件大小（字节）
+    
+    // 存储信息
+    url: varchar({ length: 1000 }), // 文件URL
+    thumbnail: varchar({ length: 1000 }), // 缩略图URL
+    storageKey: varchar("storage_key", { length: 500 }), // 存储键
+    
+    // 元数据
+    width: integer(), // 图片/视频宽度
+    height: integer(), // 图片/视频高度
+    duration: integer(), // 音视频时长（秒）
+    
+    // 描述和标签
+    description: text("description"),
+    tags: jsonb("tags").default([]),
+    
+    // 状态
+    status: varchar({ length: 20 }).default('active').notNull(), // active, deleted, processing
+    
+    createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+  },
+  (table) => [
+    index("assets_business_id_idx").on(table.businessId),
+    index("assets_folder_id_idx").on(table.folderId),
+    index("assets_type_idx").on(table.type),
+    index("assets_status_idx").on(table.status),
+  ]
+);
+
+// ==================== 关键词库表 ====================
+export const keywordLibraries = pgTable(
+  "keyword_libraries",
+  {
+    id: varchar({ length: 36 }).default(sql`gen_random_uuid()`).primaryKey().notNull(),
+    businessId: varchar("business_id", { length: 36 }).notNull(),
+    
+    // 关键词库信息
+    name: varchar({ length: 200 }).notNull(),
+    description: text("description"),
+    
+    // 关键词数据
+    keywords: jsonb("keywords").default([]).notNull(),
+    
+    // 统计
+    keywordCount: integer("keyword_count").default(0).notNull(),
+    
+    createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+  },
+  (table) => [
+    index("keyword_libraries_business_id_idx").on(table.businessId),
+  ]
+);
+
+// ==================== 创作规则表 ====================
+export const creationRules = pgTable(
+  "creation_rules",
+  {
+    id: varchar({ length: 36 }).default(sql`gen_random_uuid()`).primaryKey().notNull(),
+    businessId: varchar("business_id", { length: 36 }).notNull(),
+    
+    // 规则信息
+    name: varchar({ length: 200 }).notNull(),
+    description: text("description"),
+    type: varchar({ length: 20 }).notNull(), // article, image-text
+    
+    // 配置 - 存储 GenerationConfig
+    config: jsonb("config").default({}).notNull(),
+    
+    // 使用统计
+    useCount: integer("use_count").default(0).notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: 'string' }),
+    
+    createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+  },
+  (table) => [
+    index("creation_rules_business_id_idx").on(table.businessId),
+    index("creation_rules_type_idx").on(table.type),
+  ]
+);

@@ -40,7 +40,7 @@ export interface ContentCreationRequest {
   customLength?: number;          // 自定义字数
   generateMode: GenerateMode;     // 生成模式
   additionalKeywords?: string[];  // 额外关键词
-  tone?: 'professional' | 'friendly' | 'academic' | 'casual'; // 语气
+  tone?: 'professional' | 'friendly' | 'academic' | 'casual' | 'neutral'; // 语气
   brandInfo?: string;             // 品牌信息
   avoidTopics?: string[];         // 避免话题
   mediaFiles?: Array<{            // 媒体文件
@@ -53,6 +53,59 @@ export interface ContentCreationRequest {
   // 平台相关参数
   targetPlatforms?: string[];     // 目标发布平台（支持多平台）
   contentFormat?: ContentType;    // 内容格式（图文/视频等）
+  
+  // ========== 扩展配置（来自 GenerationConfig）==========
+  
+  // 图片设置
+  enableThumbnail?: boolean;      // 启用缩略图
+  enableContentImages?: boolean;  // 启用内容配图
+  imageCount?: number;            // 配图数量
+  
+  // TOP排行设置
+  productName?: string;           // 产品名称（TOP排行类型使用）
+  productDescription?: string;    // 产品描述
+  rankingDisplay?: 'random' | 'sequential' | 'reverse' | 'grouped'; // 排名显示方式
+  competitors?: string[];         // 竞争对手列表
+  
+  // 内容格式
+  enableBold?: boolean;           // 启用粗体
+  enableItalic?: boolean;         // 启用斜体
+  enableTable?: boolean;          // 启用表格
+  enableQuote?: boolean;          // 启用引文
+  
+  // 文章结构
+  ctaUrl?: string;                // 引导点击URL
+  enableSummary?: boolean;        // 启用内容概要
+  enableConclusion?: boolean;     // 启用结论总结
+  enableFaq?: boolean;            // 启用常见问题
+  enableAutoTitle?: boolean;      // 启用自动标题
+  customTitle?: string;           // 自定义标题
+  
+  // 内部链接
+  sitemaps?: string[];            // 站点地图URL列表
+  internalLinksPerH2?: number;    // 每个H2部分内链数量
+  
+  // 外部链接
+  externalLinks?: Array<{ url: string; anchor: string }>; // 外部链接列表
+  enableAutoExternalLinks?: boolean; // 启用自动外部链接
+  
+  // 固定开头结尾
+  enableFixedIntro?: boolean;     // 启用固定开头
+  fixedIntro?: string;            // 固定开头内容
+  enableFixedOutro?: boolean;     // 启用固定结尾
+  fixedOutro?: string;            // 固定结尾内容
+  
+  // 其他
+  language?: string;              // 语言
+  targetCountry?: string;         // 目标国家/地区
+  creativityLevel?: number;       // 创意程度 (0-100)
+  perspective?: string;           // 人称角度
+  formality?: string;             // 形式
+  personaId?: string;             // 拟人化设置ID
+  replacements?: Array<{ find: string; replace: string }>; // 全文替换规则
+  enableWebSearch?: boolean;      // 启用联网搜索
+  knowledgeBaseId?: string;       // 知识库ID
+  includeKeywords?: string;       // 包含关键词（强制添加到标题中）
 }
 
 // 蒸馏词分析结果
@@ -283,11 +336,12 @@ export async function generateArticle(
     custom: `${request.customLength || 2000}字`,
   };
 
-  const toneGuide = {
+  const toneGuide: Record<string, string> = {
     professional: '专业严谨，数据支撑',
     friendly: '亲切易懂，接地气',
     academic: '学术严谨，引用规范',
     casual: '轻松活泼，口语化',
+    neutral: '中性客观，平衡呈现',
   };
 
   const articleTypeNames: Record<ArticleType, string> = {
@@ -307,18 +361,75 @@ export async function generateArticle(
   // 平台风格提示词
   const platformPrompt = platformConfig && primaryPlatform ? getPlatformStylePrompt(primaryPlatform) : '';
 
+  // 构建文章结构要求
+  const structureRequirements: string[] = [];
+  if (request.enableSummary) structureRequirements.push('必须在文章开头包含"内容概要"部分');
+  if (request.enableConclusion) structureRequirements.push('必须在文章结尾包含"总结"部分');
+  if (request.enableFaq) structureRequirements.push('必须包含"常见问题解答"部分');
+  if (request.ctaUrl) structureRequirements.push(`必须在适当位置添加引导点击链接：${request.ctaUrl}`);
+  
+  // 构建格式要求
+  const formatRequirements: string[] = [];
+  if (request.enableBold === false) formatRequirements.push('禁止使用粗体');
+  if (request.enableItalic === false) formatRequirements.push('禁止使用斜体');
+  if (request.enableTable === false) formatRequirements.push('禁止使用表格');
+  if (request.enableQuote === false) formatRequirements.push('禁止使用引用块');
+  if (request.enableBold) formatRequirements.push('适当使用**粗体**强调重点');
+  if (request.enableTable) formatRequirements.push('对于对比类内容使用表格呈现');
+
+  // 构建链接要求
+  const linkRequirements: string[] = [];
+  if (request.sitemaps?.length) {
+    linkRequirements.push(`内部链接：请在内容中适当引用以下站内链接（每个H2部分至少${request.internalLinksPerH2 || 2}个）`);
+  }
+  if (request.externalLinks?.length) {
+    linkRequirements.push(`外部链接：请在内容中引用以下权威来源`);
+    request.externalLinks.forEach(link => {
+      linkRequirements.push(`- [${link.anchor}](${link.url})`);
+    });
+  }
+  if (request.enableAutoExternalLinks) {
+    linkRequirements.push('自动外链：请自行搜索并引用相关的权威来源（.gov/.edu/行业报告）');
+  }
+
+  // 构建固定内容
+  const fixedContent: string[] = [];
+  if (request.enableFixedIntro && request.fixedIntro) {
+    fixedContent.push(`【固定开头 - 必须放在文章最前面】\n${request.fixedIntro}`);
+  }
+  if (request.enableFixedOutro && request.fixedOutro) {
+    fixedContent.push(`【固定结尾 - 必须放在文章最后】\n${request.fixedOutro}`);
+  }
+
+  // TOP排行特殊要求
+  let topRankingPrompt = '';
+  if (request.articleType === 'product-review' && request.productName) {
+    topRankingPrompt = `
+【TOP排行特殊要求】
+- 产品名称：${request.productName}
+${request.productDescription ? `- 产品描述：${request.productDescription}` : ''}
+- 排名显示方式：${request.rankingDisplay === 'random' ? '随机排列' : request.rankingDisplay === 'sequential' ? '按顺序排列' : request.rankingDisplay === 'reverse' ? '倒序排列' : '分组展示'}
+${request.competitors?.length ? `- 竞争对手：${request.competitors.join('、')}` : ''}
+`;
+  }
+
   const systemPrompt = `你是一个专业的GEO内容创作者。你需要基于蒸馏词和大纲，创作一篇能在AI搜索引擎中获得高引用的文章。
 
 文章类型：${articleTypeNames[request.articleType]}
 目标篇幅：${lengthGuide[maxLength]}
 写作风格：${request.tone ? toneGuide[request.tone] : '专业严谨'}
+${request.language ? `语言：${request.language}` : ''}
+${request.targetCountry ? `目标地区：${request.targetCountry}` : ''}
+${request.creativityLevel !== undefined ? `创意程度：${request.creativityLevel}%（0=严谨 factual，100=高度创意）` : ''}
+${request.perspective ? `人称角度：${request.perspective === 'first' ? '第一人称（我/我们）' : request.perspective === 'second' ? '第二人称（你）' : request.perspective === 'third' ? '第三人称' : '自动选择'}` : ''}
 
-${platformPrompt ? `【平台风格要求】
-${platformPrompt}
-` : ''}
-${formatGuide ? `【内容格式要求】
-${formatGuide}
-` : ''}
+${platformPrompt ? `【平台风格要求】\n${platformPrompt}\n` : ''}
+${formatGuide ? `【内容格式要求】\n${formatGuide}\n` : ''}
+${topRankingPrompt}
+${structureRequirements.length > 0 ? `【文章结构要求】\n${structureRequirements.join('\n')}\n` : ''}
+${formatRequirements.length > 0 ? `【格式要求】\n${formatRequirements.join('\n')}\n` : ''}
+${linkRequirements.length > 0 ? `【链接要求】\n${linkRequirements.join('\n')}\n` : ''}
+${fixedContent.length > 0 ? `【固定内容】\n${fixedContent.join('\n\n')}\n` : ''}
 【GEO评分标准 - 必须严格遵守】
 你的文章将按以下六大维度评分（满分10分）：
 
@@ -358,11 +469,11 @@ ${formatGuide}
 2. 每个段落都要有明确的信息增量
 3. 数据、案例要具体真实
 4. 结构清晰，便于AI理解和引用
-${platformConfig?.id !== 'zhihu' ? '5. 必须包含常见问题解答部分' : '5. 可选包含常见问题解答'}
+${request.enableFaq !== false ? '5. 必须包含常见问题解答部分' : '5. 可选包含常见问题解答'}
 
 返回JSON格式：
 {
-  "title": "文章标题（包含核心关键词，${platformConfig ? `不超过${platformConfig.features.maxTitleLength}字` : '20-30字'}）",
+  "title": "文章标题（${request.customTitle || '包含核心关键词，20-30字'}）",
   "content": "文章正文（${platformConfig?.features.supportsMarkdown ? 'Markdown格式' : '纯文本格式'}）",
   ${request.contentFormat === 'video' ? '"script": "视频脚本（口语化，适合朗读）",' : ''}
   "schema": "JSON-LD格式的结构化数据（如有）",
@@ -411,7 +522,94 @@ ${mediaInfo}
 
   try {
     const response = await client.invoke(messages, { temperature: 0.7 });
-    const result = JSON.parse(response.content);
+    
+    // 尝试解析 JSON 响应
+    let result;
+    try {
+      // 清理响应内容，移除可能的 markdown 代码块标记
+      let content = response.content.trim();
+      if (content.startsWith('```json')) {
+        content = content.slice(7);
+      } else if (content.startsWith('```')) {
+        content = content.slice(3);
+      }
+      if (content.endsWith('```')) {
+        content = content.slice(0, -3);
+      }
+      content = content.trim();
+      
+      // 尝试找到 JSON 对象的边界
+      const jsonStart = content.indexOf('{');
+      const jsonEnd = content.lastIndexOf('}');
+      if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+        content = content.slice(jsonStart, jsonEnd + 1);
+      }
+      
+      result = JSON.parse(content);
+    } catch (parseError) {
+      console.error('JSON 解析失败:', parseError);
+      console.error('原始响应内容:', response.content.substring(0, 500));
+      
+      // 尝试从响应中提取标题和内容（兜底方案）
+      const rawContent = response.content;
+      
+      // 提取标题
+      const titleMatch = rawContent.match(/"title"\s*:\s*"([^"]+)"/);
+      
+      // 提取内容 - 使用更健壮的方式
+      let extractedContent = '';
+      const contentStartMatch = rawContent.match(/"content"\s*:\s*"/);
+      if (contentStartMatch) {
+        const startIndex = contentStartMatch.index! + contentStartMatch[0].length;
+        // 查找内容的结束位置（下一个字段的引号）
+        let endIndex = startIndex;
+        let inEscape = false;
+        while (endIndex < rawContent.length) {
+          const char = rawContent[endIndex];
+          if (inEscape) {
+            inEscape = false;
+          } else if (char === '\\') {
+            inEscape = true;
+          } else if (char === '"' && rawContent[endIndex + 1] === ',') {
+            break;
+          }
+          endIndex++;
+        }
+        extractedContent = rawContent.slice(startIndex, endIndex);
+        // 解码转义字符
+        extractedContent = extractedContent
+          .replace(/\\n/g, '\n')
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, '\\')
+          .replace(/\\t/g, '\t');
+      }
+      
+      if (titleMatch || extractedContent) {
+        result = {
+          title: titleMatch ? titleMatch[1] : '未命名文章',
+          content: extractedContent || rawContent,
+        };
+        console.log('使用兜底解析方案提取内容，标题:', result.title);
+      } else {
+        // 最后的兜底：使用整个响应作为内容
+        result = {
+          title: 'AI 生成内容',
+          content: rawContent,
+        };
+        console.log('使用最终兜底方案，将整个响应作为内容');
+      }
+    }
+    
+    // 验证必要字段，如果为空则使用默认值
+    if (!result.title || result.title.trim() === '') {
+      result.title = 'AI 生成内容';
+      console.log('标题为空，使用默认标题');
+    }
+    if (!result.content || result.content.trim() === '') {
+      // 如果内容仍然为空，说明提取失败，使用原始响应
+      result.content = response.content;
+      console.log('内容为空，使用原始响应');
+    }
     
     // 自动计算GEO评分
     const geoAnalysis: ContentAnalysis = {
