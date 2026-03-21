@@ -136,12 +136,27 @@ export default function AutoPublishPage() {
   const [selectedRule, setSelectedRule] = useState<SavedRule | null>(null);
   
   // 基本表单数据
-  const [basicForm, setBasicForm] = useState({
+  const [basicForm, setBasicForm] = useState<{
+    planName: string;
+    frequency: 'hourly' | 'daily' | 'weekly' | 'monthly';
+    articlesPerRun: number;
+    scheduledTime: string;
+    scheduledDays: number[];
+    scheduledDates: number[];
+    startDate: string;
+    endDate: string;
+    hasEndDate: boolean;
+    publishConfig: typeof defaultPublishConfig;
+  }>({
     planName: '',
-    frequency: 'daily' as const,
+    frequency: 'daily',
     articlesPerRun: 3,
     scheduledTime: '09:00',
-    scheduledDays: [1, 2, 3, 4, 5] as number[],
+    scheduledDays: [1, 2, 3, 4, 5],
+    scheduledDates: [],
+    startDate: new Date().toISOString().split('T')[0],
+    endDate: '',
+    hasEndDate: false,
     publishConfig: { ...defaultPublishConfig },
   });
   
@@ -309,6 +324,9 @@ export default function AutoPublishPage() {
           articlesPerRun: basicForm.articlesPerRun,
           scheduledTime: basicForm.scheduledTime,
           scheduledDays: basicForm.scheduledDays,
+          scheduledDates: basicForm.scheduledDates,
+          startDate: basicForm.startDate,
+          endDate: basicForm.hasEndDate ? basicForm.endDate : undefined,
           contentConfig: {
             ...defaultGenerationConfig,
             ...config,
@@ -394,6 +412,10 @@ export default function AutoPublishPage() {
       articlesPerRun: 3,
       scheduledTime: '09:00',
       scheduledDays: [1, 2, 3, 4, 5],
+      scheduledDates: [],
+      startDate: new Date().toISOString().split('T')[0],
+      endDate: '',
+      hasEndDate: false,
       publishConfig: { ...defaultPublishConfig },
     });
     setSelectedRule(null);
@@ -836,6 +858,76 @@ export default function AutoPublishPage() {
                   </div>
                 </div>
                 
+                {/* 星期几选择 - 当频率为 weekly 时显示 */}
+                {basicForm.frequency === 'weekly' && (
+                  <div className="space-y-2">
+                    <Label>执行日期</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { value: 0, label: '周日' },
+                        { value: 1, label: '周一' },
+                        { value: 2, label: '周二' },
+                        { value: 3, label: '周三' },
+                        { value: 4, label: '周四' },
+                        { value: 5, label: '周五' },
+                        { value: 6, label: '周六' },
+                      ].map(day => (
+                        <button
+                          key={day.value}
+                          type="button"
+                          onClick={() => {
+                            const days = basicForm.scheduledDays.includes(day.value)
+                              ? basicForm.scheduledDays.filter(d => d !== day.value)
+                              : [...basicForm.scheduledDays, day.value];
+                            setBasicForm({ ...basicForm, scheduledDays: days });
+                          }}
+                          className={`px-3 py-1.5 rounded-md text-sm transition-colors ${
+                            basicForm.scheduledDays.includes(day.value)
+                              ? 'bg-purple-500 text-white'
+                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          {day.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      已选择: {basicForm.scheduledDays.length > 0 
+                        ? basicForm.scheduledDays.map(d => ['周日','周一','周二','周三','周四','周五','周六'][d]).join('、')
+                        : '未选择'}
+                    </p>
+                  </div>
+                )}
+                
+                {/* 每月日期选择 - 当频率为 monthly 时显示 */}
+                {basicForm.frequency === 'monthly' && (
+                  <div className="space-y-2">
+                    <Label>执行日期（每月）</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {Array.from({ length: 31 }, (_, i) => i + 1).map(date => (
+                        <button
+                          key={date}
+                          type="button"
+                          onClick={() => {
+                            const dates = basicForm.scheduledDates || [];
+                            const newDates = dates.includes(date)
+                              ? dates.filter(d => d !== date)
+                              : [...dates, date];
+                            setBasicForm({ ...basicForm, scheduledDates: newDates } as any);
+                          }}
+                          className={`w-8 h-8 rounded text-sm transition-colors ${
+                            (basicForm.scheduledDates || []).includes(date)
+                              ? 'bg-purple-500 text-white'
+                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          {date}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>执行时间</Label>
@@ -845,6 +937,42 @@ export default function AutoPublishPage() {
                       onChange={(e) => setBasicForm({ ...basicForm, scheduledTime: e.target.value })}
                     />
                   </div>
+                  
+                  <div className="space-y-2">
+                    <Label>开始日期</Label>
+                    <Input
+                      type="date"
+                      value={basicForm.startDate}
+                      onChange={(e) => setBasicForm({ ...basicForm, startDate: e.target.value })}
+                    />
+                  </div>
+                </div>
+                
+                {/* 终止日期配置 */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="hasEndDate"
+                      checked={basicForm.hasEndDate}
+                      onChange={(e) => setBasicForm({ ...basicForm, hasEndDate: e.target.checked })}
+                      className="rounded border-gray-300"
+                    />
+                    <Label htmlFor="hasEndDate" className="font-normal">设置终止日期</Label>
+                  </div>
+                  
+                  {basicForm.hasEndDate && (
+                    <div className="pl-6">
+                      <Input
+                        type="date"
+                        value={basicForm.endDate}
+                        onChange={(e) => setBasicForm({ ...basicForm, endDate: e.target.value })}
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        计划将在终止日期后自动停止执行
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
               
@@ -860,7 +988,7 @@ export default function AutoPublishPage() {
                 <div className="flex items-center gap-4">
                   <div className="flex-1">
                     <Select 
-                      value={config.ruleId || ''} 
+                      value={config.ruleId || 'none'} 
                       onValueChange={(v) => {
                         if (v === 'none') {
                           clearRuleSelection();

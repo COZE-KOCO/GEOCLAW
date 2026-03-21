@@ -284,6 +284,7 @@ CREATE TABLE IF NOT EXISTS creation_plans (
   next_run_at TIMESTAMPTZ,
   start_date TIMESTAMPTZ DEFAULT NOW(),
   end_date TIMESTAMPTZ,
+  last_keyword_index INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -311,6 +312,24 @@ CREATE TABLE IF NOT EXISTS creation_rules (
   is_default BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 生成计划表（用户触发的批量生成任务）
+CREATE TABLE IF NOT EXISTS generation_plans (
+  id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id VARCHAR(36) NOT NULL,
+  name VARCHAR(200) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  config JSONB NOT NULL,
+  total_count INTEGER NOT NULL DEFAULT 1,
+  completed_count INTEGER NOT NULL DEFAULT 0,
+  failed_count INTEGER NOT NULL DEFAULT 0,
+  keywords JSONB DEFAULT '[]',
+  draft_ids JSONB DEFAULT '[]',
+  mode VARCHAR(20) NOT NULL DEFAULT 'article',
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- 创建索引
