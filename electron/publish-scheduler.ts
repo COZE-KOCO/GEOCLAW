@@ -229,12 +229,11 @@ export class PublishScheduler {
 
   /**
    * 检查并执行待执行任务
+   * 注意：调度器独立于窗口运行，主窗口仅用于发送通知
    */
   private async checkAndExecute(): Promise<void> {
-    if (!this.mainWindow) {
-      console.log('[PublishScheduler] 主窗口不可用，跳过检查');
-      return;
-    }
+    // 移除主窗口检查，调度器应独立运行
+    // 主窗口用于发送通知，不是必需的
 
     try {
       // 发送检查开始通知
