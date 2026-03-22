@@ -22,14 +22,6 @@
     "directories": {
       "output": "release"
     },
-    "files": [
-      {
-        "from": ".",
-        "filter": ["package.json"]
-      },
-      "dist/electron/**/*",
-      "public/**/*"
-    ],
     "extraResources": [
       {
         "from": ".next",
