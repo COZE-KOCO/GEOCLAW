@@ -25,7 +25,7 @@
     "files": [
       "dist/electron/**/*",
       "public/**/*",
-      "package.json"
+      "./package.json"
     ],
     "extraResources": [
       {
