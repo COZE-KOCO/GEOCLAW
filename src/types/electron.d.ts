@@ -60,6 +60,15 @@ export interface TaskFailedData {
   error: string;
 }
 
+export interface LoginAPI {
+  confirmLogin: (platform: string) => Promise<{ success: boolean; error?: string }>;
+  fetchAPI: (url: string, options?: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+  }) => Promise<any>;
+}
+
 export interface ElectronAPI {
   isElectron: () => Promise<boolean>;
   
@@ -83,6 +92,16 @@ export interface ElectronAPI {
   removeAccount: (platform: string, accountId: string) => Promise<boolean>;
   
   onAccountUpdated: (callback: (account: PlatformAccount) => void) => () => void;
+  
+  // 打开账号后台
+  openAccountBackend: (accountId: string) => Promise<{ success: boolean; error?: string }>;
+  
+  // fetchAPI: 使用渲染进程的 fetch 发送请求
+  fetchAPI: (url: string, options?: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+  }) => Promise<any>;
   
   platforms: Record<string, PlatformConfig>;
   
@@ -137,6 +156,7 @@ export interface ElectronAPI {
 // 扩展Window接口
 interface WindowElectronAPI {
   electronAPI?: ElectronAPI;
+  loginAPI?: LoginAPI;
 }
 
 // 合并到全局Window类型

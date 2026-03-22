@@ -279,6 +279,21 @@ export function AccountManager({ businessId }: AccountManagerProps) {
     }
   }, [loadAccounts]);
 
+  // 监听 Electron 的账号更新事件
+  useEffect(() => {
+    if (!isElectron || !window.electronAPI?.onAccountUpdated) return;
+
+    const unsubscribe = window.electronAPI.onAccountUpdated((account) => {
+      console.log('[AccountManager] 收到账号更新事件:', account);
+      // 刷新账号列表
+      loadAccounts();
+    });
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [isElectron, loadAccounts]);
+
   // 发起授权（Electron环境：打开登录窗口；Web环境：OAuth跳转）
   const handleAuthorize = async (platform: string) => {
     setAuthorizingPlatform(platform);
@@ -372,6 +387,20 @@ export function AccountManager({ businessId }: AccountManagerProps) {
       }
     } catch (error) {
       console.error('刷新失败:', error);
+    }
+  };
+
+  // 打开账号后台（仅 Electron 环境）
+  const handleOpenBackend = async (accountId: string) => {
+    try {
+      if (isElectron && window.electronAPI?.openAccountBackend) {
+        const result = await window.electronAPI.openAccountBackend(accountId);
+        if (!result.success) {
+          console.error('打开后台失败:', result.error);
+        }
+      }
+    } catch (error) {
+      console.error('打开后台失败:', error);
     }
   };
 
@@ -507,14 +536,15 @@ export function AccountManager({ businessId }: AccountManagerProps) {
           </CardTitle>
           <CardDescription>
             {isElectron 
-              ? '点击平台图标，在弹窗中登录即可自动绑定账号'
+              ? '点击平台图标，在弹窗中登录即可自动绑定账号，同一平台可绑定多个账号'
               : '点击平台图标下载客户端，使用客户端绑定账号'}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-4 md:grid-cols-7 gap-4">
             {Object.entries(platformInfo).map(([id, info]) => {
-              const isBound = accounts.some(a => a.platform === id);
+              const platformAccounts = accounts.filter(a => a.platform === id);
+              const accountCount = platformAccounts.length;
               const isAuthorizing = authorizingPlatform === id;
               // Web环境检查OAuth配置，Electron环境所有平台都可用
               const platformConfig = oauthPlatforms.find(p => p.platform === id);
@@ -525,30 +555,28 @@ export function AccountManager({ businessId }: AccountManagerProps) {
                 <button
                   key={id}
                   onClick={() => {
-                    if (!isBound) {
-                      if (isElectron) {
-                        // Electron环境：使用内置登录
-                        handleAuthorize(id);
-                      } else {
-                        // Web环境：显示下载客户端提示
-                        setDownloadPlatform(id);
-                        setShowDownloadDialog(true);
-                      }
+                    if (isElectron) {
+                      // Electron环境：使用内置登录（允许继续添加账号）
+                      handleAuthorize(id);
+                    } else {
+                      // Web环境：显示下载客户端提示
+                      setDownloadPlatform(id);
+                      setShowDownloadDialog(true);
                     }
                   }}
-                  disabled={isBound || isAuthorizing}
+                  disabled={isAuthorizing}
                   className={`
                     relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all
-                    ${isBound 
-                      ? 'border-green-500 bg-green-50 dark:bg-green-950 cursor-default' 
+                    ${accountCount > 0 
+                      ? 'border-green-500 bg-green-50 dark:bg-green-950 hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-950 cursor-pointer' 
                       : 'border-gray-200 hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-950 cursor-pointer'
                     }
                   `}
                 >
-                  {/* 已绑定标记 */}
-                  {isBound && (
-                    <div className="absolute top-2 right-2">
-                      <CheckCircle2 className="h-4 w-4 text-green-500" />
+                  {/* 已绑定数量标记 */}
+                  {accountCount > 0 && (
+                    <div className="absolute top-2 right-2 bg-green-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold">
+                      {accountCount}
                     </div>
                   )}
                   
@@ -576,10 +604,10 @@ export function AccountManager({ businessId }: AccountManagerProps) {
                   {isAuthorizing && (
                     <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
                   )}
-                  {isBound && !isAuthorizing && (
-                    <span className="text-xs text-green-600">已绑定</span>
+                  {accountCount > 0 && !isAuthorizing && (
+                    <span className="text-xs text-green-600">已绑定{accountCount}个</span>
                   )}
-                  {!isBound && !isAuthorizing && (
+                  {accountCount === 0 && !isAuthorizing && (
                     <span className="text-xs text-blue-600">点击绑定</span>
                   )}
                 </button>
@@ -610,85 +638,127 @@ export function AccountManager({ businessId }: AccountManagerProps) {
               <p className="text-sm">点击上方平台图标开始授权绑定</p>
             </div>
           ) : (
-            <ScrollArea className="h-[300px]">
-              <div className="space-y-3 pr-4">
-                {accounts.map((account) => {
-                  const info = platformInfo[account.platform] || { name: account.platform, icon: '?', color: '#888' };
+            <ScrollArea className="h-[400px]">
+              <div className="space-y-4 pr-4">
+                {/* 按平台分组显示 */}
+                {Object.entries(
+                  accounts.reduce((groups, account) => {
+                    const platform = account.platform;
+                    if (!groups[platform]) {
+                      groups[platform] = [];
+                    }
+                    groups[platform].push(account);
+                    return groups;
+                  }, {} as Record<string, Account[]>)
+                ).map(([platform, platformAccounts]) => {
+                  const info = platformInfo[platform] || { name: platform, icon: '?', color: '#888' };
                   return (
-                    <div
-                      key={account.id}
-                      className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-800 rounded-lg"
-                    >
-                      <div className="flex items-center gap-4">
-                        {/* 平台图标 */}
-                        <div
-                          className="w-12 h-12 rounded-lg flex items-center justify-center overflow-hidden"
-                          style={{ backgroundColor: `${info.color}20` }}
-                        >
-                          {account.avatar ? (
-                            <img src={account.avatar} alt="" className="w-10 h-10 rounded-lg object-cover" />
-                          ) : (
-                            <img 
-                              src={info.icon} 
-                              alt={info.name}
-                              className="w-7 h-7"
-                              onError={(e) => {
-                                e.currentTarget.style.display = 'none';
-                                e.currentTarget.parentElement!.innerHTML = `<span class="text-xl font-bold" style="color: ${info.color}">${info.name.charAt(0)}</span>`;
-                              }}
-                            />
-                          )}
-                        </div>
-                        
-                        {/* 账号信息 */}
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">{account.displayName}</span>
-                            {account.homepageUrl && (
-                              <a
-                                href={account.homepageUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-500 hover:text-blue-600"
-                              >
-                                <ExternalLink className="h-4 w-4" />
-                              </a>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-3 text-sm text-gray-500">
-                            <span>{info.name}</span>
-                            {account.followers > 0 && (
-                              <>
-                                <span>•</span>
-                                <span>{(account.followers / 1000).toFixed(1)}k 粉丝</span>
-                              </>
-                            )}
-                          </div>
-                        </div>
+                    <div key={platform} className="border rounded-lg p-4 bg-gray-50 dark:bg-gray-800">
+                      {/* 平台标题 */}
+                      <div className="flex items-center gap-2 mb-3 pb-2 border-b">
+                        <img 
+                          src={info.icon} 
+                          alt={info.name}
+                          className="w-5 h-5"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                          }}
+                        />
+                        <span className="font-medium text-gray-700 dark:text-gray-200">
+                          {info.name}
+                        </span>
+                        <Badge variant="outline" className="text-xs">
+                          {platformAccounts.length} 个账号
+                        </Badge>
                       </div>
                       
-                      <div className="flex items-center gap-3">
-                        {getAuthStatusBadge(account)}
-                        
-                        <div className="flex items-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleRefresh(account.id)}
-                            title="刷新信息"
+                      {/* 账号列表 */}
+                      <div className="space-y-2">
+                        {platformAccounts.map((account) => (
+                          <div
+                            key={account.id}
+                            className="flex items-center justify-between p-3 bg-white dark:bg-gray-900 rounded-md"
                           >
-                            <RefreshCw className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-red-600 hover:text-red-700"
-                            onClick={() => setAccountToDelete(account.id)}
-                            title="解绑账号"
-                          >
-                            <Unlink className="h-4 w-4" />
-                          </Button>
-                        </div>
+                            {/* 左侧：用户名和状态 */}
+                            <div className="flex items-center gap-3">
+                              <div
+                                className="w-8 h-8 rounded-full flex items-center justify-center overflow-hidden"
+                                style={{ backgroundColor: `${info.color}20` }}
+                              >
+                                {account.avatar ? (
+                                  <img src={account.avatar} alt="" className="w-7 h-7 rounded-full object-cover" />
+                                ) : (
+                                  <span className="text-sm font-medium" style={{ color: info.color }}>
+                                    {(account.displayName || account.accountName || '?').charAt(0)}
+                                  </span>
+                                )}
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium text-sm">
+                                    {account.displayName || account.accountName || '未知用户'}
+                                  </span>
+                                  {account.homepageUrl && (
+                                    <a
+                                      href={account.homepageUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-blue-500 hover:text-blue-600"
+                                    >
+                                      <ExternalLink className="h-3 w-3" />
+                                    </a>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2 text-xs text-gray-500">
+                                  {account.followers > 0 && (
+                                    <span>{(account.followers / 1000).toFixed(1)}k 粉丝</span>
+                                  )}
+                                  <span>•</span>
+                                  <span>
+                                    {new Date(account.updatedAt || account.createdAt).toLocaleDateString()}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            {/* 右侧：状态和操作 */}
+                            <div className="flex items-center gap-2">
+                              {getAuthStatusBadge(account)}
+                              
+                              <div className="flex items-center gap-1 ml-2">
+                                {isElectron && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 w-7 p-0 text-blue-600 hover:text-blue-700"
+                                    onClick={() => handleOpenBackend(account.id)}
+                                    title="进入后台"
+                                  >
+                                    <ExternalLink className="h-3.5 w-3.5" />
+                                  </Button>
+                                )}
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 w-7 p-0"
+                                  onClick={() => handleRefresh(account.id)}
+                                  title="刷新信息"
+                                >
+                                  <RefreshCw className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 w-7 p-0 text-red-600 hover:text-red-700"
+                                  onClick={() => setAccountToDelete(account.id)}
+                                  title="解绑账号"
+                                >
+                                  <Unlink className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   );

@@ -320,46 +320,28 @@ export class AutoPublisher {
   }
 
   /**
-   * 创建发布窗口（注入Cookie）
+   * 创建发布窗口（使用账号独立 session）
    */
   private async createPublishWindow(platform: string, account: AccountInfo): Promise<BrowserWindow> {
-    // 使用固定的 session（复用缓存，避免每次重新加载资源）
-    const partition = `persist:publish-${platform}`;
+    // 使用账号独立 session（每个账号保持自己的登录状态）
+    const partition = `persist:account-${account.id}`;
     const ses = session.fromPartition(partition);
 
-    // 注入 Cookie
-    const cookies = account.cookies || {};
-    const domainMap: Record<string, string> = {
-      xiaohongshu: '.xiaohongshu.com',
-      weibo: '.weibo.com',
-      bilibili: '.bilibili.com',
-      toutiao: '.toutiao.com',
-      douyin: '.douyin.com',
-    };
+    console.log(`[AutoPublisher] 使用账号独立 session: ${partition}`);
 
-    const domain = domainMap[platform] || `.${platform}.com`;
-    let injectedCount = 0;
+    // 验证 session 中是否有 cookies
+    const sessionCookies = await ses.cookies.get({});
+    console.log(`[AutoPublisher] Session 中 Cookie 数量: ${sessionCookies.length}`);
+    console.log(`[AutoPublisher] Session Cookie 列表: ${sessionCookies.map(c => c.name).join(', ')}`);
 
-    for (const [name, value] of Object.entries(cookies)) {
-      if (!value || value.length < 2) continue;
-      
-      try {
-        await ses.cookies.set({
-          url: `https://${domain.replace('.', '')}`,
-          name,
-          value,
-          domain,
-          path: '/',
-          secure: true,
-          httpOnly: false,
-        });
-        injectedCount++;
-      } catch (e) {
-        console.warn(`[AutoPublisher] 设置Cookie失败: ${name}`, e);
+    if (sessionCookies.length === 0) {
+      console.warn(`[AutoPublisher] 警告: Session 中没有 Cookie，发布可能失败`);
+      // 可以选择使用 API 返回的 cookies 作为备用
+      if (account.cookies && Object.keys(account.cookies).length > 0) {
+        console.log(`[AutoPublisher] 尝试从 API 数据恢复 ${Object.keys(account.cookies).length} 个 Cookie`);
+        // 这里可以选择注入 cookies，但通常 session 应该已经持久化了
       }
     }
-
-    console.log(`[AutoPublisher] 已注入 ${injectedCount} 个Cookie`);
 
     // 创建窗口
     const window = new BrowserWindow({

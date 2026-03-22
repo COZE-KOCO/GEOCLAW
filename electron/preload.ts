@@ -7,6 +7,65 @@ const electronAPI = {
     return ipcRenderer.invoke('is-electron');
   },
 
+  // ====== 网络请求 API ======
+  // 使用渲染进程的 fetch 发送请求（绕过 electron.net 的问题）
+  fetchAPI: async (url: string, options: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    timeout?: number;
+  } = {}): Promise<{
+    success: boolean;
+    status: number;
+    data: any;
+    error?: string;
+  }> => {
+    try {
+      const controller = new AbortController();
+      const timeout = options.timeout || 30000;
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
+      
+      // 添加防缓存参数
+      const urlWithCache = url.includes('?') 
+        ? `${url}&_t=${Date.now()}` 
+        : `${url}?_t=${Date.now()}`;
+      
+      const response = await fetch(urlWithCache, {
+        method: options.method || 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          ...options.headers,
+        },
+        body: options.body,
+        signal: controller.signal,
+      });
+      
+      clearTimeout(timeoutId);
+      
+      const text = await response.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { raw: text };
+      }
+      
+      return {
+        success: response.ok,
+        status: response.status,
+        data,
+        error: response.ok ? undefined : (data.error || `HTTP ${response.status}`),
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        status: 0,
+        data: null,
+        error: error.name === 'AbortError' ? '请求超时' : (error.message || '网络请求失败'),
+      };
+    }
+  },
+
   // 获取版本信息
   getVersion: (): Promise<{
     version: string;
@@ -60,6 +119,11 @@ const electronAPI = {
   // 手动确认登录成功（在登录窗口中调用）
   manualConfirmLogin: (platform: string): Promise<{ success: boolean; account?: any; error?: string }> => {
     return ipcRenderer.invoke('login-confirm', platform);
+  },
+
+  // 打开账号后台
+  openAccountBackend: (accountId: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('open-account-backend', accountId);
   },
 
   // 平台配置

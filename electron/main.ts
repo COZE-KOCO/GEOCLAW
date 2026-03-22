@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, shell, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, session, shell, dialog, globalShortcut } from 'electron';
 import * as path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import { autoUpdater } from 'electron-updater';
@@ -152,6 +152,24 @@ function createWindow() {
     } catch (e) {
       // URL解析失败，忽略
     }
+  });
+
+  // 注册快捷键：F12 或 Ctrl+Shift+I 打开开发者工具
+  globalShortcut.register('F12', () => {
+    mainWindow?.webContents.toggleDevTools();
+  });
+  
+  globalShortcut.register('CommandOrControl+Shift+I', () => {
+    mainWindow?.webContents.toggleDevTools();
+  });
+  
+  // 刷新页面快捷键
+  globalShortcut.register('CommandOrControl+R', () => {
+    mainWindow?.webContents.reload();
+  });
+  
+  globalShortcut.register('F5', () => {
+    mainWindow?.webContents.reload();
   });
 }
 
@@ -340,6 +358,9 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  // 注销所有快捷键
+  globalShortcut.unregisterAll();
+  
   stopLocalServer();
   if (process.platform !== 'darwin') {
     app.quit();
@@ -348,10 +369,18 @@ app.on('window-all-closed', () => {
 
 // 安全策略
 app.on('web-contents-created', (_, contents) => {
-  contents.on('will-navigate', (event) => {
-    // 防止导航到外部URL（登录窗口除外）
-    const url = event.url;
-    if (!url.startsWith(DEV_SERVER_URL) && !authManager?.isPlatformLoginUrl(url) && !url.startsWith('file://')) {
+  contents.on('will-navigate', (event, url) => {
+    // 允许的URL：
+    // 1. 本地开发服务器
+    // 2. file:// 协议
+    // 3. 平台域名（登录窗口可能跳转到同域名的其他页面）
+    const isAllowed = 
+      url.startsWith(DEV_SERVER_URL) || 
+      url.startsWith('file://') ||
+      authManager?.isPlatformDomain(url);
+    
+    if (!isAllowed) {
+      console.log('[Electron] 安全策略：阻止导航到', url);
       event.preventDefault();
     }
   });

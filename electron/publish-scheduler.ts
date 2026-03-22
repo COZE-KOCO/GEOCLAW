@@ -463,6 +463,8 @@ export class PublishScheduler {
       const isHttps = url.protocol === 'https:';
       const lib = isHttps ? https : http;
 
+      console.log(`[PublishScheduler] 获取账号信息: ${accountId}`);
+
       const req = lib.request({
         hostname: url.hostname,
         port: url.port || (isHttps ? 443 : 80),
@@ -476,23 +478,30 @@ export class PublishScheduler {
           try {
             const json = JSON.parse(data);
             if (json.account) {
-              resolve({
+              const accountInfo: AccountInfo = {
                 id: json.account.id,
                 platform: json.account.platform,
                 displayName: json.account.displayName || json.account.accountName,
                 cookies: json.account.metadata?.platformData || {},
                 metadata: json.account.metadata,
-              });
+              };
+              console.log(`[PublishScheduler] 账号信息获取成功: ${accountInfo.platform}, cookies 数量: ${Object.keys(accountInfo.cookies).length}`);
+              resolve(accountInfo);
             } else {
+              console.log(`[PublishScheduler] 账号不存在: ${accountId}`);
               resolve(null);
             }
           } catch (e) {
+            console.error(`[PublishScheduler] 解析账号信息失败:`, e);
             resolve(null);
           }
         });
       });
 
-      req.on('error', () => resolve(null));
+      req.on('error', (e) => {
+        console.error(`[PublishScheduler] 获取账号信息失败:`, e);
+        resolve(null);
+      });
       req.setTimeout(10000, () => {
         req.destroy();
         resolve(null);
