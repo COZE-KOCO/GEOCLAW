@@ -6,7 +6,6 @@ import { useState } from 'react';
 import { 
   LayoutDashboard, 
   Sparkles, 
-  BarChart3,
   Network,
   FileText,
   Monitor,
@@ -18,8 +17,10 @@ import {
   User,
   Users,
   Calendar,
-  Send,
   ChevronDown,
+  Images,
+  KeyRound,
+  Layers,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -35,17 +36,19 @@ const navGroups = [
     title: '内容',
     items: [
       { href: '/matrix', label: '内容创作', icon: Sparkles },
+      { href: '/matrix/batch', label: '生成规则', icon: Layers },
       { href: '/projects', label: '内容管理', icon: FileText },
+      { href: '/assets', label: '素材库', icon: Images },
+      { href: '/keywords', label: '关键词库', icon: KeyRound },
     ],
   },
   {
     title: '运营',
     items: [
+      { href: '/auto-publish', label: '全自动创作发布', icon: Sparkles },
       { href: '/publish-tasks', label: '自动发布', icon: Calendar },
       { href: '/accounts', label: '账号管理', icon: Users },
       { href: '/personas', label: '人设管理', icon: Network },
-      { href: '/publish', label: '批量发布', icon: Send },
-      { href: '/analytics', label: '数据分析', icon: BarChart3 },
     ],
   },
   {

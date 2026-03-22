@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { Sidebar } from '@/components/sidebar';
+import { AppLayout } from '@/components/app-layout';
 import { useBusiness } from '@/contexts/business-context';
 import { 
   TrendingUp, 
@@ -127,7 +127,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchDashboardData();
-  }, []);
+  }, [selectedBusiness]);
 
   // 根据选择的商家加载运营数据
   useEffect(() => {
@@ -178,7 +178,12 @@ export default function DashboardPage() {
       setLoading(true);
       setError(null);
       
-      const response = await fetch('/api/dashboard');
+      // 传递 businessId 参数获取商家特定数据
+      const url = selectedBusiness 
+        ? `/api/dashboard?businessId=${selectedBusiness}`
+        : '/api/dashboard';
+      
+      const response = await fetch(url);
       const result = await response.json();
       
       if (result.success) {
@@ -221,51 +226,45 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex">
-        <Sidebar />
-        <main className="flex-1 ml-56 flex items-center justify-center">
+      <AppLayout>
+        <div className="flex items-center justify-center py-20">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500"></div>
-        </main>
-      </div>
+        </div>
+      </AppLayout>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex">
-      {/* 左侧导航栏 */}
-      <Sidebar />
-      
-      {/* 右侧主内容区 */}
-      <main className="flex-1 ml-56 overflow-auto">
-        <div className="max-w-6xl mx-auto px-6 py-5">
-          {/* 顶部合规提示栏 */}
-          <div className="mb-4 px-4 py-2.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
-            <div className="flex items-center gap-2 text-sm text-amber-700 dark:text-amber-300">
-              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-              <span>严禁用于生成、发布违法违规内容和欺诈类内容。</span>
-            </div>
+    <AppLayout>
+      <div className="p-6">
+        {/* 顶部合规提示栏 */}
+        <div className="mb-4 px-4 py-2.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+          <div className="flex items-center gap-2 text-sm text-amber-700 dark:text-amber-300">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+            <span>严禁用于生成、发布违法违规内容和欺诈类内容。</span>
           </div>
+        </div>
 
-          {/* 页面头部 */}
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h1 className="text-xl font-semibold text-slate-800 dark:text-white">
-                欢迎来到 <span className="text-purple-600 dark:text-purple-400">GEO优化</span> 的工作台
-              </h1>
-            </div>
-            <Link 
-              href="/whats-new"
-              className="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-400 hover:text-purple-600 dark:hover:text-purple-400 transition-colors"
-            >
-              <span className="text-base">📦</span>
-              <span>V1.0.0 重磅来袭</span>
-              <span className="text-slate-500 dark:text-slate-400">—— GEO优化工具上线，支持...</span>
-              <span className="text-purple-600 dark:text-purple-400 font-medium">更多</span>
-              <ExternalLink className="h-3.5 w-3.5" />
-            </Link>
+        {/* 页面头部 */}
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-xl font-semibold text-slate-800 dark:text-white">
+              欢迎来到 <span className="text-purple-600 dark:text-purple-400">GEO优化</span> 的工作台
+            </h1>
           </div>
+          <Link 
+            href="/whats-new"
+            className="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-400 hover:text-purple-600 dark:hover:text-purple-400 transition-colors"
+          >
+            <span className="text-base">📦</span>
+            <span>V1.0.0 重磅来袭</span>
+            <span className="text-slate-500 dark:text-slate-400">—— GEO优化工具上线，支持...</span>
+            <span className="text-purple-600 dark:text-purple-400 font-medium">更多</span>
+            <ExternalLink className="h-3.5 w-3.5" />
+          </Link>
+        </div>
 
-          {/* 核心指标卡片 - 保留原有4个指标 */}
+        {/* 核心指标卡片 - 保留原有4个指标 */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             {/* 内容总数 */}
             <Card className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700">
@@ -695,8 +694,7 @@ export default function DashboardPage() {
               </Card>
             </div>
           </div>
-        </div>
-      </main>
-    </div>
+      </div>
+    </AppLayout>
   );
 }

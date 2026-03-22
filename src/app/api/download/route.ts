@@ -14,13 +14,13 @@ import { NextResponse } from 'next/server';
  */
 
 // 版本号（发布新版本时更新）
-const VERSION = process.env.DESKTOP_VERSION || '1.0.0';
-const RELEASE_DATE = process.env.DESKTOP_RELEASE_DATE || new Date().toISOString().split('T')[0];
+const VERSION = process.env.DESKTOP_VERSION || '0.1.0';
+const RELEASE_DATE = process.env.DESKTOP_RELEASE_DATE || '2025-01-28';
 
-// 从环境变量读取下载链接
+// 从环境变量读取下载链接（也可直接配置默认值）
 const DOWNLOAD_URLS = {
   darwin: process.env.DESKTOP_DOWNLOAD_URL_MAC || null,
-  win32: process.env.DESKTOP_DOWNLOAD_URL_WIN || null,
+  win32: process.env.DESKTOP_DOWNLOAD_URL_WIN || 'https://github.com/COZE-KOCO/geo-opt/releases/download/v1.0.1/GEO优化工具平台%20Setup%200.1.0.exe',
   linux: process.env.DESKTOP_DOWNLOAD_URL_LINUX || null,
 };
 
@@ -37,7 +37,7 @@ const DOWNLOAD_CONFIG = {
     win32: {
       name: 'Windows',
       url: DOWNLOAD_URLS.win32 || '#coming-soon',
-      size: '75 MB',
+      size: '122 MB',
       arch: ['x64'],
     },
     linux: {

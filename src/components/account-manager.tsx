@@ -96,16 +96,56 @@ interface AccountManagerProps {
   businessId: string;
 }
 
-// 平台信息（包含OAuth支持状态）
+// 平台信息（包含OAuth支持状态）- 使用真实图标
 const platformInfo: Record<string, { name: string; icon: string; color: string; supportsOAuth: boolean }> = {
-  wechat: { name: '微信公众号', icon: '💚', color: '#07c160', supportsOAuth: true },
-  zhihu: { name: '知乎', icon: '💡', color: '#0066ff', supportsOAuth: true },
-  weibo: { name: '微博', icon: '🔴', color: '#ff8200', supportsOAuth: true },
-  toutiao: { name: '今日头条', icon: '📰', color: '#ff0000', supportsOAuth: true },
-  bilibili: { name: 'B站', icon: '📺', color: '#00a1d6', supportsOAuth: true },
-  xiaohongshu: { name: '小红书', icon: '📕', color: '#ff2442', supportsOAuth: true },
-  douyin: { name: '抖音', icon: '🎵', color: '#000000', supportsOAuth: true },
-  baijiahao: { name: '百家号', icon: '📘', color: '#2932e1', supportsOAuth: false },
+  wechat: { 
+    name: '微信公众号', 
+    icon: 'https://api.iconify.design/simple-icons/wechat.svg?color=%2307c160', 
+    color: '#07c160', 
+    supportsOAuth: true 
+  },
+  zhihu: { 
+    name: '知乎', 
+    icon: 'https://api.iconify.design/simple-icons/zhihu.svg?color=%230066ff', 
+    color: '#0066ff', 
+    supportsOAuth: true 
+  },
+  weibo: { 
+    name: '微博', 
+    icon: 'https://api.iconify.design/simple-icons/sinaweibo.svg?color=%23ff8200', 
+    color: '#ff8200', 
+    supportsOAuth: true 
+  },
+  toutiao: { 
+    name: '今日头条', 
+    icon: 'https://api.iconify.design/simple-icons/toutiao.svg?color=%23ff0000', 
+    color: '#ff0000', 
+    supportsOAuth: true 
+  },
+  bilibili: { 
+    name: 'B站', 
+    icon: 'https://api.iconify.design/simple-icons/bilibili.svg?color=%2300a1d6', 
+    color: '#00a1d6', 
+    supportsOAuth: true 
+  },
+  xiaohongshu: { 
+    name: '小红书', 
+    icon: 'https://api.iconify.design/simple-icons/xiaohongshu.svg?color=%23ff2442', 
+    color: '#ff2442', 
+    supportsOAuth: true 
+  },
+  douyin: { 
+    name: '抖音', 
+    icon: 'https://api.iconify.design/simple-icons/tiktok.svg?color=%23000000', 
+    color: '#000000', 
+    supportsOAuth: true 
+  },
+  baijiahao: { 
+    name: '百家号', 
+    icon: 'https://api.iconify.design/simple-icons/baidu.svg?color=%232932e1', 
+    color: '#2932e1', 
+    supportsOAuth: false 
+  },
 };
 
 export function AccountManager({ businessId }: AccountManagerProps) {
@@ -514,10 +554,19 @@ export function AccountManager({ businessId }: AccountManagerProps) {
                   
                   {/* 平台图标 */}
                   <div
-                    className="w-10 h-10 rounded-lg flex items-center justify-center text-lg"
+                    className="w-10 h-10 rounded-lg flex items-center justify-center overflow-hidden"
                     style={{ backgroundColor: `${info.color}20` }}
                   >
-                    {info.icon}
+                    <img 
+                      src={info.icon} 
+                      alt={info.name}
+                      className="w-6 h-6"
+                      onError={(e) => {
+                        // 如果图标加载失败，显示默认图标
+                        e.currentTarget.style.display = 'none';
+                        e.currentTarget.parentElement!.innerHTML = `<span class="text-lg">${info.name.charAt(0)}</span>`;
+                      }}
+                    />
                   </div>
                   
                   {/* 平台名称 */}
@@ -573,13 +622,21 @@ export function AccountManager({ businessId }: AccountManagerProps) {
                       <div className="flex items-center gap-4">
                         {/* 平台图标 */}
                         <div
-                          className="w-12 h-12 rounded-lg flex items-center justify-center text-xl"
+                          className="w-12 h-12 rounded-lg flex items-center justify-center overflow-hidden"
                           style={{ backgroundColor: `${info.color}20` }}
                         >
                           {account.avatar ? (
                             <img src={account.avatar} alt="" className="w-10 h-10 rounded-lg object-cover" />
                           ) : (
-                            info.icon
+                            <img 
+                              src={info.icon} 
+                              alt={info.name}
+                              className="w-7 h-7"
+                              onError={(e) => {
+                                e.currentTarget.style.display = 'none';
+                                e.currentTarget.parentElement!.innerHTML = `<span class="text-xl font-bold" style="color: ${info.color}">${info.name.charAt(0)}</span>`;
+                              }}
+                            />
                           )}
                         </div>
                         

@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Navigation } from '@/components/navigation';
+import { AppLayout } from '@/components/app-layout';
 import {
   LineChart,
   Line,
@@ -77,26 +77,30 @@ export default function MonitoringPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 flex items-center justify-center">
-        <div className="text-center">
-          <Activity className="h-12 w-12 mx-auto mb-4 animate-spin text-blue-500" />
-          <p className="text-gray-600 dark:text-gray-400">加载数据中...</p>
+      <AppLayout>
+        <div className="flex items-center justify-center h-full">
+          <div className="text-center">
+            <Activity className="h-12 w-12 mx-auto mb-4 animate-spin text-purple-500" />
+            <p className="text-gray-600 dark:text-gray-400">加载数据中...</p>
+          </div>
         </div>
-      </div>
+      </AppLayout>
     );
   }
 
   if (!project) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 flex items-center justify-center">
-        <div className="text-center">
-          <XCircle className="h-12 w-12 mx-auto mb-4 text-red-500" />
-          <p className="text-gray-600 dark:text-gray-400">项目不存在</p>
-          <Link href="/projects">
-            <Button className="mt-4">返回项目列表</Button>
-          </Link>
+      <AppLayout>
+        <div className="flex items-center justify-center h-full">
+          <div className="text-center">
+            <XCircle className="h-12 w-12 mx-auto mb-4 text-red-500" />
+            <p className="text-gray-600 dark:text-gray-400">项目不存在</p>
+            <Link href="/projects">
+              <Button className="mt-4">返回项目列表</Button>
+            </Link>
+          </div>
         </div>
-      </div>
+      </AppLayout>
     );
   }
 
@@ -127,9 +131,8 @@ export default function MonitoringPage() {
     .reverse();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
-      <Navigation />
-      <div className="container mx-auto px-4 py-8 max-w-7xl">
+    <AppLayout>
+      <div className="p-6 space-y-6">
         {/* 头部 */}
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-4">
@@ -496,6 +499,6 @@ export default function MonitoringPage() {
           </TabsContent>
         </Tabs>
       </div>
-    </div>
+    </AppLayout>
   );
 }

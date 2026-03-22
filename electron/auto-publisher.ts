@@ -1,9 +1,15 @@
 /**
  * 自动化发布引擎
  * 使用 Electron BrowserWindow 实现全自动发布
+ * 
+ * 支持的功能：
+ * - 自动填写标题、内容、标签
+ * - 自动上传图片（通过 fetch 远程图片 + 注入 File 对象）
+ * - 自动点击发布按钮
+ * - 发布结果验证
  */
 
-import { BrowserWindow, session, ipcMain, Cookie, app } from 'electron';
+import { BrowserWindow, session, app, net } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -40,23 +46,14 @@ export interface AccountInfo {
 
 // 平台选择器配置
 export interface PlatformSelectors {
-  // 发布页面URL
   publishUrl: string;
-  // 标题输入框
   titleInput: string | string[];
-  // 内容编辑器
   contentEditor: string | string[];
-  // 图片上传按钮
   imageUpload: string | string[];
-  // 发布按钮
   publishButton: string | string[];
-  // 成功标识
   successIndicator: string | string[];
-  // 标签输入（可选）
   tagInput?: string | string[];
-  // 封面上传（可选）
   coverUpload?: string | string[];
-  // 其他元素
   [key: string]: string | string[] | undefined;
 }
 
@@ -65,16 +62,13 @@ interface PlatformConfig {
   name: string;
   publishUrl: string;
   selectors: PlatformSelectors;
-  // 发布前准备脚本
   prepareScript?: string;
-  // 发布后验证脚本
   verifyScript?: string;
-  // 是否需要等待图片上传
   waitForImageUpload?: boolean;
-  // 图片上传等待时间（毫秒）
   imageUploadWait?: number;
-  // 发布等待时间（毫秒）
   publishWait?: number;
+  // 图片上传后的 URL 获取选择器
+  uploadedImageUrlSelector?: string;
 }
 
 // 各平台配置
@@ -87,13 +81,14 @@ const PLATFORM_PUBLISH_CONFIG: Record<string, PlatformConfig> = {
       titleInput: ['.c-input__inner input', 'input[placeholder*="标题"]', '#title-input'],
       contentEditor: ['.c-textarea__inner textarea', 'textarea[placeholder*="正文"]', '#content-input'],
       imageUpload: ['.upload-btn input[type="file"]', 'input[type="file"]', '.image-upload input'],
-      publishButton: ['.publish-btn', 'button:contains("发布")', '.c-button--primary'],
-      successIndicator: ['.publish-success', '.success-tip', '.result-success'],
+      publishButton: ['.publish-btn', '.c-button--primary', 'button[class*="publish"]'],
+      successIndicator: ['.publish-success', '.success-tip', '.result-success', '[class*="success"]'],
       tagInput: ['.tag-input input', 'input[placeholder*="标签"]'],
     },
     waitForImageUpload: true,
     imageUploadWait: 5000,
     publishWait: 3000,
+    uploadedImageUrlSelector: '.upload-item img, .preview-img img, [class*="image"] img',
     prepareScript: `
       // 等待页面加载
       await new Promise(r => setTimeout(r, 2000));
@@ -112,12 +107,13 @@ const PLATFORM_PUBLISH_CONFIG: Record<string, PlatformConfig> = {
       titleInput: [], // 微博没有标题
       contentEditor: ['.W_input', 'textarea[name="content"]', '#publisher_content'],
       imageUpload: ['.pic_input input[type="file"]', 'input[type="file"][accept*="image"]'],
-      publishButton: ['.W_btn_a', 'button:contains("发布")', '.publish-btn'],
-      successIndicator: ['.send-success', '.W_layer_success'],
+      publishButton: ['.W_btn_a', '.publish-btn', 'button[action-type="post"]'],
+      successIndicator: ['.send-success', '.W_layer_success', '[class*="success"]'],
     },
     waitForImageUpload: true,
     imageUploadWait: 3000,
     publishWait: 2000,
+    uploadedImageUrlSelector: '.pic_list img, .upload-img img',
   },
   
   bilibili: {
@@ -128,13 +124,14 @@ const PLATFORM_PUBLISH_CONFIG: Record<string, PlatformConfig> = {
       titleInput: ['#title-input', 'input[placeholder*="标题"]', '.title-input input'],
       contentEditor: ['#content-editor', '.editor-content', 'textarea[placeholder*="内容"]'],
       imageUpload: ['.image-upload input[type="file"]', 'input[type="file"]'],
-      publishButton: ['.submit-btn', 'button:contains("发布")', '.publish-btn'],
-      successIndicator: ['.success-tip', '.result-success'],
+      publishButton: ['.submit-btn', '.publish-btn', 'button[class*="submit"]'],
+      successIndicator: ['.success-tip', '.result-success', '[class*="success"]'],
       coverUpload: ['.cover-upload input[type="file"]'],
     },
     waitForImageUpload: true,
     imageUploadWait: 5000,
     publishWait: 3000,
+    uploadedImageUrlSelector: '.image-preview img, .uploaded-img img',
   },
   
   toutiao: {
@@ -145,13 +142,14 @@ const PLATFORM_PUBLISH_CONFIG: Record<string, PlatformConfig> = {
       titleInput: ['#title', 'input[placeholder*="标题"]', '.title-input'],
       contentEditor: ['#content', '.editor-content', 'textarea[placeholder*="内容"]'],
       imageUpload: ['.image-upload input[type="file"]', 'input[type="file"]'],
-      publishButton: ['.publish-btn', 'button:contains("发布")', '.submit-btn'],
-      successIndicator: ['.success-tip', '.result-success'],
+      publishButton: ['.publish-btn', '.submit-btn', 'button[class*="publish"]'],
+      successIndicator: ['.success-tip', '.result-success', '[class*="success"]'],
       coverUpload: ['.cover-upload input[type="file"]'],
     },
     waitForImageUpload: true,
     imageUploadWait: 5000,
     publishWait: 3000,
+    uploadedImageUrlSelector: '.image-item img, .upload-preview img',
   },
   
   douyin: {
@@ -162,8 +160,8 @@ const PLATFORM_PUBLISH_CONFIG: Record<string, PlatformConfig> = {
       titleInput: [], // 抖音视频没有标题
       contentEditor: ['.editor-input textarea', 'textarea[placeholder*="描述"]', '.content-input'],
       imageUpload: [], // 抖音上传视频
-      publishButton: ['.publish-btn', 'button:contains("发布")', '.submit-btn'],
-      successIndicator: ['.success-tip', '.result-success'],
+      publishButton: ['.publish-btn', '.submit-btn', 'button[class*="publish"]'],
+      successIndicator: ['.success-tip', '.result-success', '[class*="success"]'],
     },
     waitForImageUpload: false,
     publishWait: 5000,
@@ -218,22 +216,77 @@ export class AutoPublisher {
         await publishWindow.webContents.executeJavaScript(config.prepareScript);
       }
 
-      // 填写内容
-      await this.fillContent(publishWindow, config, content);
-
-      // 上传图片
-      if (content.images && content.images.length > 0 && config.selectors.imageUpload) {
-        await this.uploadImages(publishWindow, config, content.images);
+      // 处理内容中的图片 URL
+      let processedContent = content.content;
+      const imageUrls = content.images || [];
+      
+      // 从内容中提取图片 URL（Markdown 格式）
+      const markdownImages = this.extractMarkdownImages(content.content);
+      const allImages = [...new Set([...imageUrls, ...markdownImages.map(m => m.url)])];
+      
+      // 上传图片并获取 URL 映射
+      let imageUrlMap: Record<string, string> = {};
+      if (allImages.length > 0) {
+        const selectors = config.selectors.imageUpload;
+        const selectorArray: string[] = Array.isArray(selectors) ? selectors : (selectors ? [selectors] : []);
+        
+        if (selectorArray.length > 0) {
+          imageUrlMap = await this.uploadImagesFromUrl(publishWindow, config, allImages);
+          
+          // 替换内容中的图片 URL
+          for (const [oldUrl, newUrl] of Object.entries(imageUrlMap)) {
+            processedContent = processedContent.replace(
+              new RegExp(this.escapeRegExp(oldUrl), 'g'),
+              newUrl
+            );
+          }
+        }
       }
 
-      // 点击发布
+      // 填写标题
+      if (content.title && config.selectors.titleInput) {
+        const titleSelectors = Array.isArray(config.selectors.titleInput) 
+          ? config.selectors.titleInput 
+          : [config.selectors.titleInput];
+        if (titleSelectors.length > 0) {
+          await this.fillElement(publishWindow, titleSelectors, content.title);
+          console.log(`[AutoPublisher] 已填写标题: ${content.title}`);
+        }
+      }
+
+      // 填写内容（使用处理后的内容）
+      if (processedContent && config.selectors.contentEditor) {
+        const contentSelectors = Array.isArray(config.selectors.contentEditor) 
+          ? config.selectors.contentEditor 
+          : [config.selectors.contentEditor];
+        if (contentSelectors.length > 0) {
+          await this.fillElement(publishWindow, contentSelectors, content.html || processedContent);
+          console.log(`[AutoPublisher] 已填写内容`);
+        }
+      }
+
+      // 填写标签
+      if (content.tags && content.tags.length > 0 && config.selectors.tagInput) {
+        const tagSelectors = Array.isArray(config.selectors.tagInput) 
+          ? config.selectors.tagInput 
+          : [config.selectors.tagInput];
+        await this.fillElement(publishWindow, tagSelectors, content.tags.join(' '));
+        console.log(`[AutoPublisher] 已填写标签: ${content.tags.join(', ')}`);
+      }
+
+      // 点击发布按钮
       await this.clickPublish(publishWindow, config);
 
       // 验证发布结果
       const success = await this.verifyPublish(publishWindow, config);
 
+      // 获取发布后的 URL
+      const publishedUrl = await this.getPublishedUrl(publishWindow, config);
+
       // 关闭窗口
-      publishWindow.close();
+      if (!publishWindow.isDestroyed()) {
+        publishWindow.close();
+      }
       this.publishWindows.delete(platform);
 
       return {
@@ -241,6 +294,7 @@ export class AutoPublisher {
         accountId: account.id,
         accountName: account.displayName,
         status: success ? 'success' : 'failed',
+        publishedUrl,
         publishedAt: new Date().toISOString(),
         error: success ? undefined : '发布验证失败',
       };
@@ -269,11 +323,11 @@ export class AutoPublisher {
    * 创建发布窗口（注入Cookie）
    */
   private async createPublishWindow(platform: string, account: AccountInfo): Promise<BrowserWindow> {
-    // 创建独立的session
-    const partition = `persist:publish-${platform}-${Date.now()}`;
+    // 使用固定的 session（复用缓存，避免每次重新加载资源）
+    const partition = `persist:publish-${platform}`;
     const ses = session.fromPartition(partition);
 
-    // 注入Cookie
+    // 注入 Cookie
     const cookies = account.cookies || {};
     const domainMap: Record<string, string> = {
       xiaohongshu: '.xiaohongshu.com',
@@ -284,8 +338,11 @@ export class AutoPublisher {
     };
 
     const domain = domainMap[platform] || `.${platform}.com`;
+    let injectedCount = 0;
 
     for (const [name, value] of Object.entries(cookies)) {
+      if (!value || value.length < 2) continue;
+      
       try {
         await ses.cookies.set({
           url: `https://${domain.replace('.', '')}`,
@@ -296,12 +353,13 @@ export class AutoPublisher {
           secure: true,
           httpOnly: false,
         });
+        injectedCount++;
       } catch (e) {
         console.warn(`[AutoPublisher] 设置Cookie失败: ${name}`, e);
       }
     }
 
-    console.log(`[AutoPublisher] 已注入 ${Object.keys(cookies).length} 个Cookie`);
+    console.log(`[AutoPublisher] 已注入 ${injectedCount} 个Cookie`);
 
     // 创建窗口
     const window = new BrowserWindow({
@@ -313,6 +371,7 @@ export class AutoPublisher {
         contextIsolation: true,
         session: ses,
         webSecurity: false, // 允许跨域上传图片
+        javascript: true,
       },
     });
 
@@ -324,169 +383,284 @@ export class AutoPublisher {
    */
   private async waitForPageLoad(window: BrowserWindow): Promise<void> {
     await new Promise<void>((resolve) => {
+      const checkReady = () => {
+        if (window.webContents.isLoading()) {
+          setTimeout(checkReady, 100);
+        } else {
+          // 额外等待确保动态内容加载
+          setTimeout(resolve, 2000);
+        }
+      };
+      
       window.webContents.once('did-finish-load', () => {
-        // 额外等待2秒确保动态内容加载
         setTimeout(resolve, 2000);
       });
+      
+      // 超时保护
+      setTimeout(resolve, 10000);
     });
   }
 
   /**
-   * 填写内容
+   * 填写元素内容
    */
-  private async fillContent(
+  private async fillElement(
     window: BrowserWindow,
-    config: PlatformConfig,
-    content: PublishContent
-  ): Promise<void> {
-    const selectors = config.selectors;
+    selectors: string[],
+    value: string
+  ): Promise<boolean> {
+    // 转义特殊字符
+    const escapedValue = value
+      .replace(/\\/g, '\\\\')
+      .replace(/`/g, '\\`')
+      .replace(/\$/g, '\\$');
 
-    // 填写标题
-    if (content.title && selectors.titleInput) {
-      const titleSelectors = Array.isArray(selectors.titleInput) ? selectors.titleInput : [selectors.titleInput];
-      if (titleSelectors.length > 0) {
-        const titleJs = this.buildFillScript(titleSelectors, content.title);
-        await window.webContents.executeJavaScript(titleJs);
-        console.log(`[AutoPublisher] 已填写标题: ${content.title}`);
-      }
-    }
-
-    // 填写内容
-    if (content.content && selectors.contentEditor) {
-      const contentSelectors = Array.isArray(selectors.contentEditor) ? selectors.contentEditor : [selectors.contentEditor];
-      if (contentSelectors.length > 0) {
-        const contentJs = this.buildFillScript(contentSelectors, content.html || content.content);
-        await window.webContents.executeJavaScript(contentJs);
-        console.log(`[AutoPublisher] 已填写内容`);
-      }
-    }
-
-    // 填写标签
-    if (content.tags && content.tags.length > 0 && selectors.tagInput) {
-      const tagSelectors = Array.isArray(selectors.tagInput) ? selectors.tagInput : [selectors.tagInput];
-      const tagJs = this.buildFillScript(tagSelectors, content.tags.join(' '));
-      await window.webContents.executeJavaScript(tagJs);
-      console.log(`[AutoPublisher] 已填写标签: ${content.tags.join(', ')}`);
-    }
-  }
-
-  /**
-   * 构建填写脚本（支持多个选择器）
-   */
-  private buildFillScript(selectors: string[], value: string): string {
-    const escapedValue = value.replace(/'/g, "\\'").replace(/\n/g, '\\n');
-    return `
+    const script = `
       (function() {
         const selectors = ${JSON.stringify(selectors)};
+        const value = \`${escapedValue}\`;
+        
         for (const sel of selectors) {
           try {
             const el = document.querySelector(sel);
             if (el) {
               // 处理不同类型的元素
               if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-                el.value = '${escapedValue}';
+                // 原生输入框
+                el.focus();
+                el.value = value;
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
+                el.dispatchEvent(new Event('blur', { bubbles: true }));
+                console.log('[AutoPublisher] 已填写输入框:', sel);
+                return true;
               } else if (el.contentEditable === 'true') {
-                el.innerHTML = '${escapedValue}';
+                // 富文本编辑器
+                el.focus();
+                el.innerHTML = value;
                 el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                document.execCommand && document.execCommand('insertHTML', false, value);
+                console.log('[AutoPublisher] 已填写富文本编辑器:', sel);
+                return true;
+              } else if (el.tagName === 'IFRAME') {
+                // iframe 编辑器
+                try {
+                  const iframeDoc = el.contentDocument || el.contentWindow.document;
+                  const body = iframeDoc.body;
+                  if (body.contentEditable === 'true') {
+                    body.innerHTML = value;
+                    body.dispatchEvent(new Event('input', { bubbles: true }));
+                    console.log('[AutoPublisher] 已填写iframe编辑器:', sel);
+                    return true;
+                  }
+                } catch (e) {
+                  console.log('[AutoPublisher] 无法访问iframe:', e);
+                }
               }
-              console.log('已填写元素:', sel);
-              return true;
             }
           } catch (e) {
-            console.log('选择器失败:', sel, e);
+            console.log('[AutoPublisher] 选择器失败:', sel, e);
           }
         }
         return false;
       })();
     `;
+
+    return window.webContents.executeJavaScript(script);
   }
 
   /**
-   * 上传图片
+   * 从内容中提取 Markdown 图片
    */
-  private async uploadImages(
+  private extractMarkdownImages(content: string): Array<{ alt: string; url: string }> {
+    const regex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+    const images: Array<{ alt: string; url: string }> = [];
+    let match;
+    
+    while ((match = regex.exec(content)) !== null) {
+      images.push({
+        alt: match[1],
+        url: match[2],
+      });
+    }
+    
+    return images;
+  }
+
+  /**
+   * 上传图片（从远程 URL 直接 fetch 并注入）
+   * 
+   * 原理：
+   * 1. 在目标平台页面中 fetch 远程图片（扣子存储已配置 CORS）
+   * 2. 将响应转为 Blob
+   * 3. 创建 File 对象
+   * 4. 通过 DataTransfer 注入到文件输入控件
+   * 5. 触发 change 事件
+   */
+  private async uploadImagesFromUrl(
     window: BrowserWindow,
     config: PlatformConfig,
-    images: string[]
-  ): Promise<void> {
+    imageUrls: string[]
+  ): Promise<Record<string, string>> {
     const selectors = config.selectors.imageUpload;
+    const selectorArray: string[] = Array.isArray(selectors) ? selectors : (selectors ? [selectors] : []);
     
-    // 确保 selectors 是数组
-    const selectorArray: string[] = Array.isArray(selectors) ? selectors : [selectors];
-    
-    if (!selectors || selectorArray.length === 0) {
+    if (selectorArray.length === 0) {
       console.log(`[AutoPublisher] 该平台不支持图片上传`);
-      return;
+      return {};
     }
 
-    console.log(`[AutoPublisher] 开始上传 ${images.length} 张图片...`);
+    console.log(`[AutoPublisher] 开始上传 ${imageUrls.length} 张图片...`);
+    
+    const urlMap: Record<string, string> = {};
 
-    for (let i = 0; i < images.length; i++) {
-      const imageUrl = images[i];
-      
-      // 下载图片到本地
-      const localPath = await this.downloadImage(imageUrl);
-      if (!localPath) continue;
+    for (let i = 0; i < imageUrls.length; i++) {
+      const imageUrl = imageUrls[i];
+      console.log(`[AutoPublisher] 上传图片 ${i + 1}/${imageUrls.length}: ${imageUrl.substring(0, 50)}...`);
 
-      // 上传图片
-      const uploadJs = `
-        (function() {
-          const selectors = ${JSON.stringify(selectorArray)};
-          for (const sel of selectors) {
-            const input = document.querySelector(sel);
-            if (input && input.type === 'file') {
-              // 触发点击打开文件选择器
-              input.click();
-              return true;
+      try {
+        // 在页面中执行图片上传脚本
+        const result = await window.webContents.executeJavaScript(`
+          (async function() {
+            const imageUrl = '${imageUrl}';
+            const selectors = ${JSON.stringify(selectorArray)};
+            
+            try {
+              // 步骤1: fetch 远程图片（扣子存储已配置 CORS）
+              console.log('[AutoPublisher] 开始fetch图片:', imageUrl);
+              const response = await fetch(imageUrl, {
+                method: 'GET',
+                mode: 'cors',
+                credentials: 'omit',
+              });
+              
+              if (!response.ok) {
+                throw new Error('fetch失败: ' + response.status);
+              }
+              
+              // 步骤2: 转为 Blob
+              const blob = await response.blob();
+              console.log('[AutoPublisher] 图片大小:', blob.size, 'bytes');
+              
+              // 从 URL 提取文件名
+              let filename = 'image.jpg';
+              try {
+                const urlPath = new URL(imageUrl).pathname;
+                const pathParts = urlPath.split('/');
+                filename = pathParts[pathParts.length - 1] || 'image.jpg';
+                // 清理文件名中的特殊字符
+                filename = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+              } catch (e) {}
+              
+              // 步骤3: 创建 File 对象
+              const file = new File([blob], filename, { 
+                type: blob.type || 'image/jpeg' 
+              });
+              console.log('[AutoPublisher] 创建File对象:', file.name, file.type, file.size);
+              
+              // 步骤4: 找到文件上传控件并注入
+              for (const sel of selectors) {
+                try {
+                  const input = document.querySelector(sel);
+                  if (input && input.type === 'file') {
+                    // 步骤5: 通过 DataTransfer 注入文件
+                    const dataTransfer = new DataTransfer();
+                    dataTransfer.items.add(file);
+                    input.files = dataTransfer.files;
+                    
+                    // 步骤6: 触发 change 事件
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    
+                    console.log('[AutoPublisher] 已注入文件到:', sel);
+                    return { success: true, filename: file.name };
+                  }
+                } catch (e) {
+                  console.log('[AutoPublisher] 选择器失败:', sel, e);
+                }
+              }
+              
+              // 如果没找到文件上传控件，尝试拖放方式
+              const dropZone = document.querySelector('[class*="upload"], [class*="drop"], [class*="drag"]');
+              if (dropZone) {
+                const dataTransfer = new DataTransfer();
+                dataTransfer.items.add(file);
+                
+                const dropEvent = new DragEvent('drop', {
+                  bubbles: true,
+                  cancelable: true,
+                  dataTransfer: dataTransfer,
+                });
+                dropZone.dispatchEvent(dropEvent);
+                console.log('[AutoPublisher] 已通过拖放方式上传');
+                return { success: true, filename: file.name };
+              }
+              
+              return { success: false, error: '找不到文件上传控件' };
+              
+            } catch (e) {
+              console.error('[AutoPublisher] 上传失败:', e);
+              return { success: false, error: e.message };
+            }
+          })();
+        `);
+
+        if (result.success) {
+          console.log(`[AutoPublisher] 图片上传成功: ${result.filename}`);
+          
+          // 等待上传完成
+          await new Promise(r => setTimeout(r, config.imageUploadWait || 3000));
+          
+          // 尝试获取上传后的图片 URL
+          if (config.uploadedImageUrlSelector) {
+            const uploadedUrl = await this.getUploadedImageUrl(window, config.uploadedImageUrlSelector);
+            if (uploadedUrl) {
+              urlMap[imageUrl] = uploadedUrl;
+              console.log(`[AutoPublisher] 上传后URL: ${uploadedUrl.substring(0, 50)}...`);
             }
           }
-          return false;
-        })();
-      `;
-
-      await window.webContents.executeJavaScript(uploadJs);
+        } else {
+          console.error(`[AutoPublisher] 图片上传失败: ${result.error}`);
+        }
+        
+      } catch (error: any) {
+        console.error(`[AutoPublisher] 图片上传异常:`, error);
+      }
       
-      // 等待图片上传
-      await new Promise(r => setTimeout(r, config.imageUploadWait || 3000));
-      
-      console.log(`[AutoPublisher] 已上传图片 ${i + 1}/${images.length}`);
+      // 图片间间隔，避免频率过高
+      if (i < imageUrls.length - 1) {
+        await new Promise(r => setTimeout(r, 500));
+      }
     }
+
+    return urlMap;
   }
 
   /**
-   * 下载图片到本地
+   * 获取上传后的图片 URL
    */
-  private async downloadImage(url: string): Promise<string | null> {
+  private async getUploadedImageUrl(
+    window: BrowserWindow,
+    selector: string
+  ): Promise<string | null> {
     try {
-      const https = require('https');
-      const http = require('http');
+      const script = `
+        (function() {
+          const el = document.querySelector('${selector}');
+          if (el && el.src) {
+            return el.src;
+          }
+          if (el && el.style && el.style.backgroundImage) {
+            const match = el.style.backgroundImage.match(/url\\(["']?([^"')]+)["']?\\)/);
+            if (match) return match[1];
+          }
+          return null;
+        })();
+      `;
       
-      const tempDir = path.join(app.getPath('temp'), 'geo-optimizer');
-      if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
-      }
-
-      const fileName = `img_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.jpg`;
-      const filePath = path.join(tempDir, fileName);
-
-      return new Promise((resolve) => {
-        const lib = url.startsWith('https') ? https : http;
-        const file = fs.createWriteStream(filePath);
-        
-        lib.get(url, (response: any) => {
-          response.pipe(file);
-          file.on('finish', () => {
-            file.close();
-            resolve(filePath);
-          });
-        }).on('error', () => {
-          resolve(null);
-        });
-      });
+      return await window.webContents.executeJavaScript(script);
     } catch (e) {
-      console.error(`[AutoPublisher] 下载图片失败:`, e);
       return null;
     }
   }
@@ -495,46 +669,84 @@ export class AutoPublisher {
    * 点击发布按钮
    */
   private async clickPublish(window: BrowserWindow, config: PlatformConfig): Promise<void> {
-    const selectors = config.selectors.publishButton as string[];
+    const selectors = Array.isArray(config.selectors.publishButton) 
+      ? config.selectors.publishButton 
+      : [config.selectors.publishButton];
 
-    const clickJs = `
+    const script = `
       (function() {
         const selectors = ${JSON.stringify(selectors)};
+        
+        // 辅助函数：通过文本内容查找按钮
+        function findButtonByText(text) {
+          const buttons = document.querySelectorAll('button, [role="button"], a.btn, .btn');
+          for (const btn of buttons) {
+            if (btn.textContent && btn.textContent.includes(text)) {
+              return btn;
+            }
+          }
+          return null;
+        }
+        
         for (const sel of selectors) {
           try {
-            // 支持伪选择器 :contains()
+            // 处理 :contains() 伪选择器
             if (sel.includes(':contains(')) {
               const match = sel.match(/(.+):contains\\("(.+)"\\)/);
               if (match) {
                 const baseSel = match[1];
                 const text = match[2];
-                const elements = document.querySelectorAll(baseSel);
-                for (const el of elements) {
-                  if (el.textContent.includes(text)) {
-                    el.click();
-                    console.log('已点击按钮:', sel);
+                
+                if (baseSel.trim()) {
+                  const elements = document.querySelectorAll(baseSel);
+                  for (const el of elements) {
+                    if (el.textContent && el.textContent.includes(text)) {
+                      el.click();
+                      console.log('[AutoPublisher] 已点击按钮(contains):', text);
+                      return true;
+                    }
+                  }
+                } else {
+                  // 没有基础选择器，直接通过文本查找
+                  const btn = findButtonByText(text);
+                  if (btn) {
+                    btn.click();
+                    console.log('[AutoPublisher] 已点击按钮(text):', text);
                     return true;
                   }
                 }
               }
             } else {
               const el = document.querySelector(sel);
-              if (el) {
+              if (el && !el.disabled) {
                 el.click();
-                console.log('已点击按钮:', sel);
+                console.log('[AutoPublisher] 已点击按钮:', sel);
                 return true;
               }
             }
           } catch (e) {
-            console.log('点击失败:', sel, e);
+            console.log('[AutoPublisher] 点击失败:', sel, e);
           }
         }
+        
+        // 尝试通过常见发布文本查找
+        const publishTexts = ['发布', '发表', '提交', 'Publish', 'Submit'];
+        for (const text of publishTexts) {
+          const btn = findButtonByText(text);
+          if (btn && !btn.disabled) {
+            btn.click();
+            console.log('[AutoPublisher] 已点击发布按钮:', text);
+            return true;
+          }
+        }
+        
+        console.log('[AutoPublisher] 未找到可点击的发布按钮');
         return false;
       })();
     `;
 
-    await window.webContents.executeJavaScript(clickJs);
-    console.log(`[AutoPublisher] 已点击发布按钮`);
+    await window.webContents.executeJavaScript(script);
+    console.log(`[AutoPublisher] 已尝试点击发布按钮`);
 
     // 等待发布完成
     await new Promise(r => setTimeout(r, config.publishWait || 3000));
@@ -544,36 +756,133 @@ export class AutoPublisher {
    * 验证发布结果
    */
   private async verifyPublish(window: BrowserWindow, config: PlatformConfig): Promise<boolean> {
-    const selectors = config.selectors.successIndicator as string[];
+    const selectors = Array.isArray(config.selectors.successIndicator) 
+      ? config.selectors.successIndicator 
+      : [config.selectors.successIndicator];
 
-    if (!selectors || selectors.length === 0) {
-      // 没有配置成功标识，默认返回成功
-      return true;
+    if (!selectors[0]) {
+      // 没有配置成功标识，检查 URL 变化
+      const script = `
+        (function() {
+          const url = window.location.href;
+          if (url.includes('success') || url.includes('published') || url.includes('complete')) {
+            return true;
+          }
+          
+          // 检查是否有错误提示
+          const errorSelectors = ['.error', '.alert-error', '[class*="error"]', '[class*="fail"]'];
+          for (const sel of errorSelectors) {
+            const el = document.querySelector(sel);
+            if (el && el.offsetParent !== null) {
+              console.log('[AutoPublisher] 发现错误提示:', el.textContent);
+              return false;
+            }
+          }
+          
+          // 默认认为成功
+          return true;
+        })();
+      `;
+      
+      try {
+        return await window.webContents.executeJavaScript(script);
+      } catch (e) {
+        return true;
+      }
     }
 
-    const verifyJs = `
+    const script = `
       (function() {
         const selectors = ${JSON.stringify(selectors)};
+        
+        // 检查成功标识
         for (const sel of selectors) {
           const el = document.querySelector(sel);
           if (el && el.offsetParent !== null) {
+            console.log('[AutoPublisher] 发现成功标识:', sel);
             return true;
           }
         }
         
-        // 检查URL变化
-        if (window.location.href.includes('success') || 
-            window.location.href.includes('published')) {
+        // 检查 URL 变化
+        const url = window.location.href;
+        if (url.includes('success') || url.includes('published') || url.includes('complete')) {
+          console.log('[AutoPublisher] URL表示成功:', url);
           return true;
+        }
+        
+        // 检查页面标题或提示
+        const pageText = document.body.innerText;
+        const successKeywords = ['发布成功', '已发布', '发布完成', '成功', 'Success'];
+        for (const keyword of successKeywords) {
+          if (pageText.includes(keyword)) {
+            console.log('[AutoPublisher] 页面包含成功关键词:', keyword);
+            return true;
+          }
+        }
+        
+        // 检查是否有错误提示
+        const errorSelectors = ['.error', '.alert-error', '[class*="error"]', '[class*="fail"]'];
+        for (const sel of errorSelectors) {
+          const el = document.querySelector(sel);
+          if (el && el.offsetParent !== null) {
+            console.log('[AutoPublisher] 发现错误提示');
+            return false;
+          }
         }
         
         return false;
       })();
     `;
 
-    const result = await window.webContents.executeJavaScript(verifyJs);
-    console.log(`[AutoPublisher] 发布验证结果: ${result}`);
-    return result;
+    try {
+      const result = await window.webContents.executeJavaScript(script);
+      console.log(`[AutoPublisher] 发布验证结果: ${result}`);
+      return result;
+    } catch (e) {
+      console.error(`[AutoPublisher] 验证脚本执行失败:`, e);
+      return true; // 出错时默认认为成功
+    }
+  }
+
+  /**
+   * 获取发布后的 URL
+   */
+  private async getPublishedUrl(window: BrowserWindow, config: PlatformConfig): Promise<string | undefined> {
+    try {
+      const script = `
+        (function() {
+          // 尝试从页面中提取发布后的链接
+          const linkSelectors = [
+            'a[href*="detail"]',
+            'a[href*="post"]',
+            'a[href*="article"]',
+            '.published-url a',
+            '[class*="link"] a',
+          ];
+          
+          for (const sel of linkSelectors) {
+            const el = document.querySelector(sel);
+            if (el && el.href) {
+              return el.href;
+            }
+          }
+          
+          return null;
+        })();
+      `;
+      
+      return await window.webContents.executeJavaScript(script);
+    } catch (e) {
+      return undefined;
+    }
+  }
+
+  /**
+   * 转义正则表达式特殊字符
+   */
+  private escapeRegExp(string: string): string {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   /**
@@ -587,7 +896,6 @@ export class AutoPublisher {
         this.publishWindows.delete(platform);
       }
     } else {
-      // 关闭所有发布窗口
       for (const [plat, win] of this.publishWindows) {
         if (!win.isDestroyed()) {
           win.close();

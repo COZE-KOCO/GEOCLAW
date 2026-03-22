@@ -91,9 +91,9 @@ interface PublishPlanFormData {
   startDate: string;
   endDate: string;
   
-  // 文章选择
-  selectedDraftId: string;
-  selectedDraft: ContentDraft | null;
+  // 文章选择（支持多选）
+  selectedDraftIds: string[];
+  selectedDrafts: ContentDraft[];
   
   // 发布账号
   selectedAccounts: SelectedAccount[];
@@ -149,8 +149,8 @@ export function PublishPlanCreator({
     maxRuns: 0,
     startDate: '',
     endDate: '',
-    selectedDraftId: '',
-    selectedDraft: null,
+    selectedDraftIds: [],
+    selectedDrafts: [],
     selectedAccounts: [],
     priority: 5,
   });
@@ -211,13 +211,47 @@ export function PublishPlanCreator({
     setFormData(prev => ({ ...prev, [field]: value }));
   };
 
-  // 选择文章
-  const selectDraft = (draft: ContentDraft) => {
-    setFormData(prev => ({
-      ...prev,
-      selectedDraftId: draft.id,
-      selectedDraft: draft,
-    }));
+  // 切换文章选择（多选）
+  const toggleDraft = (draft: ContentDraft) => {
+    setFormData(prev => {
+      const isSelected = prev.selectedDraftIds.includes(draft.id);
+      if (isSelected) {
+        // 取消选择
+        return {
+          ...prev,
+          selectedDraftIds: prev.selectedDraftIds.filter(id => id !== draft.id),
+          selectedDrafts: prev.selectedDrafts.filter(d => d.id !== draft.id),
+        };
+      } else {
+        // 添加选择
+        return {
+          ...prev,
+          selectedDraftIds: [...prev.selectedDraftIds, draft.id],
+          selectedDrafts: [...prev.selectedDrafts, draft],
+        };
+      }
+    });
+  };
+
+  // 全选/取消全选文章
+  const toggleAllDrafts = () => {
+    setFormData(prev => {
+      if (prev.selectedDraftIds.length === filteredDrafts.length) {
+        // 取消全选
+        return {
+          ...prev,
+          selectedDraftIds: [],
+          selectedDrafts: [],
+        };
+      } else {
+        // 全选
+        return {
+          ...prev,
+          selectedDraftIds: filteredDrafts.map(d => d.id),
+          selectedDrafts: [...filteredDrafts],
+        };
+      }
+    });
   };
 
   // 按平台分组账号
@@ -307,7 +341,7 @@ export function PublishPlanCreator({
 
   // 提交创建
   const handleSubmit = async () => {
-    if (!formData.planName || !formData.selectedDraftId || formData.selectedAccounts.length === 0) {
+    if (!formData.planName || formData.selectedDraftIds.length === 0 || formData.selectedAccounts.length === 0) {
       return;
     }
     
@@ -329,9 +363,12 @@ export function PublishPlanCreator({
             maxRuns: formData.maxRuns,
             startDate: formData.startDate || undefined,
             endDate: formData.endDate || undefined,
-            draftId: formData.selectedDraftId,
-            title: formData.selectedDraft?.title || '',
-            content: formData.selectedDraft?.content || '',
+            draftIds: formData.selectedDraftIds,
+            drafts: formData.selectedDrafts.map(d => ({
+              id: d.id,
+              title: d.title,
+              content: d.content,
+            })),
             targetAccounts: formData.selectedAccounts,
             priority: formData.priority,
           },
@@ -354,8 +391,8 @@ export function PublishPlanCreator({
           maxRuns: 0,
           startDate: '',
           endDate: '',
-          selectedDraftId: '',
-          selectedDraft: null,
+          selectedDraftIds: [],
+          selectedDrafts: [],
           selectedAccounts: [],
           priority: 5,
         });
@@ -395,7 +432,7 @@ export function PublishPlanCreator({
   );
 
   // 验证是否可以提交
-  const canSubmit = formData.planName && formData.selectedDraftId && formData.selectedAccounts.length > 0;
+  const canSubmit = formData.planName && formData.selectedDraftIds.length > 0 && formData.selectedAccounts.length > 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -589,11 +626,22 @@ export function PublishPlanCreator({
 
           {/* 文章选择 Tab */}
           <TabsContent value="content" className="space-y-4 mt-4">
-            <div className="space-y-2">
-              <Label>从文章库选择 *</Label>
-              <p className="text-sm text-gray-500">
-                选择已保存的文章（仅显示状态为"就绪"的文章）
-              </p>
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <Label>从文章库选择 *</Label>
+                <p className="text-sm text-gray-500">
+                  选择已保存的文章（仅显示状态为"就绪"的文章），支持多选
+                </p>
+              </div>
+              {filteredDrafts.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={toggleAllDrafts}
+                >
+                  {formData.selectedDraftIds.length === filteredDrafts.length ? '取消全选' : '全选'}
+                </Button>
+              )}
             </div>
 
             {/* 搜索 */}
@@ -608,35 +656,32 @@ export function PublishPlanCreator({
             </div>
 
             {/* 已选择的文章 */}
-            {formData.selectedDraft && (
+            {formData.selectedDrafts.length > 0 && (
               <div className="p-4 bg-purple-50 dark:bg-purple-950 rounded-lg border-2 border-purple-500">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <CheckCircle2 className="h-5 w-5 text-purple-600" />
-                      <span className="font-medium">已选择</span>
-                    </div>
-                    <p className="font-semibold mt-2">{formData.selectedDraft.title}</p>
-                    <p className="text-sm text-gray-600 mt-1 line-clamp-2">
-                      {formData.selectedDraft.content.substring(0, 100)}...
-                    </p>
-                    <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
-                      <span>SEO评分: {formData.selectedDraft.seoScore}</span>
-                      <span>
-                        创建于: {new Date(formData.selectedDraft.createdAt).toLocaleDateString()}
-                      </span>
-                    </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      updateField('selectedDraftId', '');
-                      updateField('selectedDraft', null);
-                    }}
-                  >
-                    取消选择
-                  </Button>
+                <div className="flex items-center gap-2 mb-3">
+                  <CheckCircle2 className="h-5 w-5 text-purple-600" />
+                  <span className="font-medium">已选择 {formData.selectedDrafts.length} 篇文章</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {formData.selectedDrafts.map(draft => (
+                    <Badge 
+                      key={draft.id} 
+                      variant="secondary" 
+                      className="px-3 py-1 flex items-center gap-1"
+                    >
+                      <FileText className="h-3 w-3" />
+                      {draft.title.length > 20 ? draft.title.substring(0, 20) + '...' : draft.title}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleDraft(draft);
+                        }}
+                        className="ml-1 hover:text-red-500"
+                      >
+                        ×
+                      </button>
+                    </Badge>
+                  ))}
                 </div>
               </div>
             )}
@@ -658,10 +703,10 @@ export function PublishPlanCreator({
                   {filteredDrafts.map(draft => (
                     <div
                       key={draft.id}
-                      onClick={() => selectDraft(draft)}
+                      onClick={() => toggleDraft(draft)}
                       className={`
                         p-4 rounded-lg border cursor-pointer transition-all
-                        ${formData.selectedDraftId === draft.id
+                        ${formData.selectedDraftIds.includes(draft.id)
                           ? 'border-purple-500 bg-purple-50 dark:bg-purple-950'
                           : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'}
                       `}
@@ -679,7 +724,7 @@ export function PublishPlanCreator({
                             </span>
                           </div>
                         </div>
-                        {formData.selectedDraftId === draft.id && (
+                        {formData.selectedDraftIds.includes(draft.id) && (
                           <CheckCircle2 className="h-5 w-5 text-purple-600" />
                         )}
                       </div>

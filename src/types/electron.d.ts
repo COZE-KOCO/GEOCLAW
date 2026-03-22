@@ -24,6 +24,42 @@ export interface DownloadProgress {
   bytesPerSecond: number;
 }
 
+export interface SchedulerStatus {
+  isRunning: boolean;
+  currentTask: {
+    taskId: string;
+    taskName: string;
+    status: string;
+    progress: number;
+    results: any[];
+  } | null;
+}
+
+export interface TaskStartedData {
+  taskId: string;
+  taskName: string;
+  title: string;
+  targetPlatforms: Array<{
+    platform: string;
+    accountId: string;
+    accountName?: string;
+  }>;
+}
+
+export interface TaskCompletedData {
+  taskId: string;
+  taskName: string;
+  success: boolean;
+  results: any[];
+  completedAt: string;
+}
+
+export interface TaskFailedData {
+  taskId: string;
+  taskName: string;
+  error: string;
+}
+
 export interface ElectronAPI {
   isElectron: () => Promise<boolean>;
   
@@ -72,6 +108,30 @@ export interface ElectronAPI {
   }) => void) => () => void;
   
   onUpdateError: (callback: (error: string) => void) => () => void;
+  
+  // 发布任务调度器相关
+  getSchedulerStatus: () => Promise<SchedulerStatus>;
+  
+  triggerSchedulerCheck: () => Promise<{ success: boolean }>;
+  
+  toggleScheduler: (enable: boolean) => Promise<{ success: boolean }>;
+  
+  onSchedulerStatus: (callback: (status: { status: string; checkInterval?: number }) => void) => () => void;
+  
+  onSchedulerChecking: (callback: (data: { time: string }) => void) => () => void;
+  
+  onPendingTasks: (callback: (data: { count: number; tasks: any[] }) => void) => () => void;
+  
+  onTaskStarted: (callback: (data: TaskStartedData) => void) => () => void;
+  
+  onTaskCompleted: (callback: (data: TaskCompletedData) => void) => () => void;
+  
+  onTaskFailed: (callback: (data: TaskFailedData) => void) => () => void;
+  
+  onSchedulerError: (callback: (data: { error: string }) => void) => () => void;
+  
+  // 立即执行任务
+  executeTaskImmediately: (taskId: string) => Promise<{ success: boolean; error?: string }>;
 }
 
 // 扩展Window接口

@@ -14,6 +14,23 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  // 排除 Node.js 内置模块，避免客户端打包错误
+  serverExternalPackages: ['child_process', 'fs', 'path', 'os'],
+  // Next.js 16 默认使用 Turbopack，添加空配置消除警告
+  turbopack: {},
+  webpack: (config, { isServer }) => {
+    // 在客户端构建时，将 Node.js 内置模块设为空
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        child_process: false,
+        fs: false,
+        path: false,
+        os: false,
+      };
+    }
+    return config;
+  },
 };
 
 export default nextConfig;

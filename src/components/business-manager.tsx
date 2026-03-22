@@ -11,14 +11,17 @@ import {
   Building,
   Users,
   Power,
-  PowerOff
+  PowerOff,
+  Plus,
+  Loader2
 } from 'lucide-react';
 import { 
   Dialog, 
   DialogContent, 
   DialogHeader, 
   DialogTitle,
-  DialogDescription 
+  DialogDescription,
+  DialogFooter
 } from '@/components/ui/dialog';
 import {
   DropdownMenu,
@@ -30,6 +33,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Select,
   SelectContent,
@@ -62,6 +66,21 @@ const businessTypeLabels: Record<string, { label: string; icon: typeof Store }> 
   chain: { label: '连锁', icon: Users },
 };
 
+// 行业选项
+const industryOptions = [
+  { value: '餐饮', label: '餐饮' },
+  { value: '零售', label: '零售' },
+  { value: '教育', label: '教育' },
+  { value: '医疗', label: '医疗' },
+  { value: '美容', label: '美容' },
+  { value: '健身', label: '健身' },
+  { value: '旅游', label: '旅游' },
+  { value: '金融', label: '金融' },
+  { value: '房地产', label: '房地产' },
+  { value: '互联网', label: '互联网' },
+  { value: '其他', label: '其他' },
+];
+
 export function BusinessManager({ open, onOpenChange }: BusinessManagerProps) {
   const { 
     businesses, 
@@ -81,11 +100,26 @@ export function BusinessManager({ open, onOpenChange }: BusinessManagerProps) {
     city: '',
   });
   const [actionConfirm, setActionConfirm] = useState<{ id: string; action: 'delete' | 'deactivate' } | null>(null);
+  
+  // 新增商家状态
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [createForm, setCreateForm] = useState({
+    name: '',
+    type: 'store' as 'store' | 'brand' | 'company' | 'chain',
+    industry: '',
+    city: '',
+    description: '',
+  });
+  const [creating, setCreating] = useState(false);
 
   // 加载所有商家（包括停用的）
   useEffect(() => {
     if (open) {
       fetchAllBusinesses();
+      // 重置状态
+      setShowCreateForm(false);
+      setEditBusiness(null);
+      setActionConfirm(null);
     }
   }, [open]);
 
@@ -99,6 +133,59 @@ export function BusinessManager({ open, onOpenChange }: BusinessManagerProps) {
     }
   };
 
+  // 创建新商家
+  const handleCreate = async () => {
+    if (!createForm.name.trim()) {
+      toast.error('请输入商家名称');
+      return;
+    }
+
+    setCreating(true);
+    try {
+      const res = await fetch('/api/businesses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: createForm.name,
+          type: createForm.type,
+          industry: createForm.industry,
+          city: createForm.city,
+          description: createForm.description,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        await fetchAllBusinesses();
+        await refreshBusinesses();
+        
+        // 自动选中新创建的商家
+        if (data.business?.id) {
+          setSelectedBusiness(data.business.id);
+        }
+        
+        // 重置表单
+        setCreateForm({
+          name: '',
+          type: 'store',
+          industry: '',
+          city: '',
+          description: '',
+        });
+        setShowCreateForm(false);
+        toast.success('商家创建成功');
+      } else {
+        const data = await res.json();
+        toast.error(data.error || '创建失败');
+      }
+    } catch (error) {
+      console.error('创建商家失败:', error);
+      toast.error('创建失败');
+    } finally {
+      setCreating(false);
+    }
+  };
+
   // 开始编辑
   const handleStartEdit = (business: BusinessItem) => {
     setEditBusiness(business);
@@ -109,6 +196,7 @@ export function BusinessManager({ open, onOpenChange }: BusinessManagerProps) {
       city: business.address || '',
     });
     setActionConfirm(null);
+    setShowCreateForm(false);
   };
 
   // 保存编辑
@@ -235,16 +323,117 @@ export function BusinessManager({ open, onOpenChange }: BusinessManagerProps) {
         </DialogHeader>
 
         <div className="py-4">
+          {/* 新增商家按钮 */}
+          {!showCreateForm && !editBusiness && (
+            <Button 
+              className="w-full mb-4" 
+              variant="outline"
+              onClick={() => setShowCreateForm(true)}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              新增商家
+            </Button>
+          )}
+
+          {/* 新增商家表单 */}
+          {showCreateForm && (
+            <div className="mb-4 p-4 border rounded-lg bg-slate-50 dark:bg-slate-800/50 space-y-3">
+              <h4 className="font-medium text-sm">新增商家</h4>
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">商家名称 *</Label>
+                    <Input
+                      value={createForm.name}
+                      onChange={(e) => setCreateForm(prev => ({ ...prev, name: e.target.value }))}
+                      placeholder="输入商家名称"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">商家类型</Label>
+                    <Select 
+                      value={createForm.type} 
+                      onValueChange={(v: any) => setCreateForm(prev => ({ ...prev, type: v }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="store">门店</SelectItem>
+                        <SelectItem value="brand">品牌</SelectItem>
+                        <SelectItem value="company">企业</SelectItem>
+                        <SelectItem value="chain">连锁</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">行业</Label>
+                    <Select 
+                      value={createForm.industry} 
+                      onValueChange={(v) => setCreateForm(prev => ({ ...prev, industry: v }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="选择行业" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {industryOptions.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">城市</Label>
+                    <Input
+                      value={createForm.city}
+                      onChange={(e) => setCreateForm(prev => ({ ...prev, city: e.target.value }))}
+                      placeholder="输入城市"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button 
+                    size="sm" 
+                    variant="outline" 
+                    onClick={() => {
+                      setShowCreateForm(false);
+                      setCreateForm({
+                        name: '',
+                        type: 'store',
+                        industry: '',
+                        city: '',
+                        description: '',
+                      });
+                    }}
+                  >
+                    取消
+                  </Button>
+                  <Button size="sm" onClick={handleCreate} disabled={creating}>
+                    {creating && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    创建
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 商家列表 */}
           {loading ? (
             <div className="text-center py-8 text-muted-foreground">
               加载中...
             </div>
-          ) : allBusinesses.length === 0 ? (
+          ) : allBusinesses.length === 0 && !showCreateForm ? (
             <div className="text-center py-8 text-muted-foreground">
-              暂无商家，请先创建
+              <Building2 className="h-12 w-12 mx-auto mb-3 opacity-30" />
+              <p>暂无商家</p>
+              <p className="text-sm mt-1">点击上方按钮创建您的第一个商家</p>
             </div>
-          ) : (
-            <div className="space-y-2 max-h-[400px] overflow-y-auto">
+          ) : allBusinesses.length === 0 && showCreateForm ? null : (
+            <div className="space-y-2 max-h-[320px] overflow-y-auto">
               {allBusinesses.map((business) => {
                 const TypeIcon = businessTypeLabels[business.type]?.icon || Store;
                 const isSelected = selectedBusiness === business.id;

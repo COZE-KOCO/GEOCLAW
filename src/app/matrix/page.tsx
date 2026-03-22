@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
+import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -10,6 +11,12 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { AppLayout } from '@/components/app-layout';
 import { Separator } from '@/components/ui/separator';
 import { Progress } from '@/components/ui/progress';
@@ -17,6 +24,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { MediaUpload, type MediaFile } from '@/components/media-upload';
 import { PublishAssistant } from '@/components/publish-assistant';
 import { BusinessSelector } from '@/components/business-selector';
+import { CreationRecordMenu } from '@/components/creation-record-menu';
 import { useBusiness } from '@/contexts/business-context';
 import { 
   Network,
@@ -34,6 +42,7 @@ import {
   Globe,
   CheckCircle2,
   ChevronRight,
+  ChevronDown,
   Copy,
   RefreshCw,
   Wand2,
@@ -558,9 +567,7 @@ export default function MatrixPage() {
                       </div>
                       
                       <div className="flex gap-2 pt-2">
-                        <Button variant="outline" size="sm" className="flex-1" onClick={(e) => { e.stopPropagation(); }}>
-                          创作记录
-                        </Button>
+                        <CreationRecordMenu />
                         <Button size="sm" className="flex-1 bg-purple-500 hover:bg-purple-600" onClick={(e) => { e.stopPropagation(); setCreationMode('ai-smart'); }}>
                           点击开始
                         </Button>
@@ -603,9 +610,7 @@ export default function MatrixPage() {
                       </div>
                       
                       <div className="flex gap-2 pt-2">
-                        <Button variant="outline" size="sm" className="flex-1" onClick={(e) => { e.stopPropagation(); }}>
-                          创作记录
-                        </Button>
+                        <CreationRecordMenu />
                         <Button size="sm" className="flex-1 bg-purple-500 hover:bg-purple-600" onClick={(e) => { e.stopPropagation(); setCreationMode('geo-optimize'); }}>
                           点击开始
                         </Button>
@@ -614,7 +619,7 @@ export default function MatrixPage() {
                   </Card>
                   
                   {/* 卡片3: 批量自动创作 */}
-                  <Card className="relative overflow-hidden hover:shadow-lg transition-all cursor-pointer group" onClick={() => setCreationMode('batch-create')}>
+                  <Card className="relative overflow-hidden hover:shadow-lg transition-all cursor-pointer group">
                     {/* 顶部图标区域 */}
                     <div className="h-32 bg-gradient-to-br from-blue-100 to-blue-50 dark:from-blue-900/30 dark:to-blue-800/20 flex items-center justify-center">
                       <div className="w-20 h-16 bg-white dark:bg-gray-800 rounded-lg shadow-md flex items-center justify-center">
@@ -648,60 +653,33 @@ export default function MatrixPage() {
                       </div>
                       
                       <div className="flex gap-2 pt-2">
-                        <Button variant="outline" size="sm" className="flex-1" onClick={(e) => { e.stopPropagation(); }}>
-                          创作记录
-                        </Button>
-                        <Button size="sm" className="flex-1 bg-purple-500 hover:bg-purple-600" onClick={(e) => { e.stopPropagation(); setCreationMode('batch-create'); }}>
-                          点击开始
-                        </Button>
+                        <CreationRecordMenu />
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button size="sm" className="flex-1 bg-white hover:bg-gray-50 text-purple-600 border-2 border-purple-300">
+                              点击开始
+                              <ChevronDown className="h-4 w-4 ml-1" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-40">
+                            <DropdownMenuItem asChild>
+                              <Link href="/matrix/batch/create" className="cursor-pointer">
+                                <FileText className="h-4 w-4 mr-2" />
+                                生成长文章
+                              </Link>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem asChild>
+                              <Link href="/matrix/image-text/create" className="cursor-pointer">
+                                <ImageIcon className="h-4 w-4 mr-2" />
+                                生成图文
+                              </Link>
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </CardContent>
                   </Card>
                   
-                  {/* 卡片4: 模板快速创作 */}
-                  <Card className="relative overflow-hidden hover:shadow-lg transition-all cursor-pointer group" onClick={() => setCreationMode('template-create')}>
-                    {/* 顶部图标区域 */}
-                    <div className="h-32 bg-gradient-to-br from-cyan-100 to-cyan-50 dark:from-cyan-900/30 dark:to-cyan-800/20 flex items-center justify-center">
-                      <div className="w-20 h-16 bg-white dark:bg-gray-800 rounded-lg shadow-md flex items-center justify-center">
-                        <FileText className="h-10 w-10 text-cyan-500" />
-                      </div>
-                    </div>
-                    
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-lg">模板快速创作</CardTitle>
-                      <CardDescription>自由创作+AI辅助</CardDescription>
-                    </CardHeader>
-                    
-                    <CardContent className="space-y-3">
-                      <div className="space-y-1.5 text-sm text-gray-600 dark:text-gray-400">
-                        <div className="flex items-center gap-2">
-                          <CheckCircle2 className="h-4 w-4 text-green-500" />
-                          <span>AI模板选择</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <CheckCircle2 className="h-4 w-4 text-green-500" />
-                          <span>自由编辑创作</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <CheckCircle2 className="h-4 w-4 text-green-500" />
-                          <span>素材库调用</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <CheckCircle2 className="h-4 w-4 text-green-500" />
-                          <span>一键AI润色</span>
-                        </div>
-                      </div>
-                      
-                      <div className="flex gap-2 pt-2">
-                        <Button variant="outline" size="sm" className="flex-1" onClick={(e) => { e.stopPropagation(); }}>
-                          创作记录
-                        </Button>
-                        <Button size="sm" className="flex-1 bg-purple-500 hover:bg-purple-600" onClick={(e) => { e.stopPropagation(); setCreationMode('template-create'); }}>
-                          点击开始
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
                 </div>
               </div>
             ) : (
@@ -723,7 +701,6 @@ export default function MatrixPage() {
                       {creationMode === 'ai-smart' && 'AI智能创作'}
                       {creationMode === 'geo-optimize' && 'GEO优化创作'}
                       {creationMode === 'batch-create' && '批量自动创作'}
-                      {creationMode === 'template-create' && '模板快速创作'}
                     </h3>
                   </div>
                 </div>

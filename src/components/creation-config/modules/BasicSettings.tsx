@@ -116,23 +116,20 @@ export function BasicSettings({
               </Button>
             </div>
             <Select
-              value={config.keywordLibraryId || undefined}
-              onValueChange={(v) => onChange('keywordLibraryId', v)}
+              value={config.keywordLibraryId ? config.keywordLibraryId : undefined}
+              onValueChange={(v) => onChange('keywordLibraryId', v === '__none__' ? '' : v)}
               disabled={disabled}
             >
               <SelectTrigger>
                 <SelectValue placeholder="请选择关键词库" />
               </SelectTrigger>
               <SelectContent>
-                {keywordLibraries.length === 0 ? (
-                  <SelectItem value="__empty__">暂无关键词库</SelectItem>
-                ) : (
-                  keywordLibraries.map((lib) => (
-                    <SelectItem key={lib.id} value={lib.id}>
-                      {lib.name} ({lib.keywords.length}个关键词)
-                    </SelectItem>
-                  ))
-                )}
+                <SelectItem value="__none__">不使用关键词库</SelectItem>
+                {keywordLibraries.map((lib) => (
+                  <SelectItem key={lib.id} value={lib.id}>
+                    {lib.name} ({lib.keywords.length}个关键词)
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
             <p className="text-xs text-gray-500">我们将使用这个关键词库来提取相关关键词。</p>

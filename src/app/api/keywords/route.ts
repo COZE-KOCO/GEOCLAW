@@ -1,136 +1,155 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { mineKeywords, analyzeKeyword, getKeywordSuggestions, analyzeKeywordCompetition } from '@/lib/keyword-mining';
+import {
+  getKeywordLibrariesByBusiness,
+  getKeywordLibraryById,
+  createKeywordLibrary,
+  updateKeywordLibrary,
+  deleteKeywordLibrary,
+  addKeywordsToLibrary,
+  removeKeywordFromLibrary,
+  getKeywordLibraryStats,
+  type CreateKeywordLibraryInput,
+  type UpdateKeywordLibraryInput,
+} from '@/lib/keyword-store';
 
 /**
- * POST /api/keywords - 关键词挖掘
+ * GET /api/keywords
+ * 获取关键词库列表或单个关键词库
+ * Query params:
+ * - id: 关键词库ID（可选，获取单个）
+ * - businessId: 商家ID（必填）
+ * - stats: 是否获取统计信息
  */
-export async function POST(request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { action, topic, seedKeywords, targetPlatforms, keyword, keywords, partialKeyword } = body;
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+    const businessId = searchParams.get('businessId');
+    const getStats = searchParams.get('stats') === 'true';
 
-    // 关键词挖掘
-    if (action === 'mine' || (!action && topic)) {
-      if (!topic) {
-        return NextResponse.json(
-          { success: false, error: '请提供主题' },
-          { status: 400 }
-        );
+    // 获取单个关键词库
+    if (id) {
+      const library = await getKeywordLibraryById(id);
+      if (!library) {
+        return NextResponse.json({ error: '关键词库不存在' }, { status: 404 });
       }
-
-      const result = await mineKeywords({
-        topic,
-        seedKeywords,
-        targetPlatforms,
-        depth: body.depth || 'basic',
-      });
-
-      return NextResponse.json({ 
-        success: true, 
-        data: result 
-      });
+      return NextResponse.json({ library });
     }
 
-    // 单个关键词分析
-    if (action === 'analyze') {
-      if (!keyword || !topic) {
-        return NextResponse.json(
-          { success: false, error: '请提供关键词和主题' },
-          { status: 400 }
-        );
-      }
-
-      const result = await analyzeKeyword(keyword, topic);
-      
-      if (!result) {
-        return NextResponse.json(
-          { success: false, error: '关键词分析失败' },
-          { status: 500 }
-        );
-      }
-
-      return NextResponse.json({ 
-        success: true, 
-        data: result 
-      });
+    // 获取统计信息
+    if (getStats && businessId) {
+      const stats = await getKeywordLibraryStats(businessId);
+      return NextResponse.json({ stats });
     }
 
-    // 关键词建议
-    if (action === 'suggest') {
-      if (!partialKeyword || !topic) {
-        return NextResponse.json(
-          { success: false, error: '请提供部分关键词和主题' },
-          { status: 400 }
-        );
-      }
-
-      const suggestions = await getKeywordSuggestions(partialKeyword, topic);
-      
-      return NextResponse.json({ 
-        success: true, 
-        data: suggestions 
-      });
+    // 获取关键词库列表
+    if (!businessId) {
+      return NextResponse.json({ error: '缺少商家ID' }, { status: 400 });
     }
 
-    // 竞争分析
-    if (action === 'competition') {
-      if (!keywords || !Array.isArray(keywords) || keywords.length === 0) {
-        return NextResponse.json(
-          { success: false, error: '请提供关键词列表' },
-          { status: 400 }
-        );
-      }
-
-      const result = await analyzeKeywordCompetition(keywords);
-      
-      return NextResponse.json({ 
-        success: true, 
-        data: result 
-      });
-    }
-
-    return NextResponse.json(
-      { success: false, error: '未知操作类型' },
-      { status: 400 }
-    );
+    const libraries = await getKeywordLibrariesByBusiness(businessId);
+    return NextResponse.json({ libraries });
   } catch (error) {
-    console.error('关键词挖掘API错误:', error);
-    return NextResponse.json(
-      { success: false, error: '关键词挖掘失败' },
-      { status: 500 }
-    );
+    console.error('获取关键词库数据失败:', error);
+    return NextResponse.json({ error: '获取关键词库数据失败' }, { status: 500 });
   }
 }
 
 /**
- * GET /api/keywords - 获取关键词挖掘说明
+ * POST /api/keywords
+ * 创建关键词库
  */
-export async function GET() {
-  return NextResponse.json({
-    success: true,
-    data: {
-      actions: [
-        {
-          name: 'mine',
-          description: '关键词挖掘',
-          params: ['topic', 'seedKeywords?', 'targetPlatforms?', 'depth?']
-        },
-        {
-          name: 'analyze',
-          description: '单个关键词分析',
-          params: ['keyword', 'topic']
-        },
-        {
-          name: 'suggest',
-          description: '关键词建议',
-          params: ['partialKeyword', 'topic']
-        },
-        {
-          name: 'competition',
-          description: '竞争分析',
-          params: ['keywords']
-        }
-      ]
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    
+    const input: CreateKeywordLibraryInput = {
+      businessId: body.businessId,
+      name: body.name,
+      description: body.description,
+      keywords: body.keywords,
+    };
+
+    const library = await createKeywordLibrary(input);
+    if (!library) {
+      return NextResponse.json({ error: '创建关键词库失败' }, { status: 500 });
     }
-  });
+    return NextResponse.json({ library }, { status: 201 });
+  } catch (error) {
+    console.error('创建关键词库失败:', error);
+    return NextResponse.json({ error: '创建关键词库失败' }, { status: 500 });
+  }
+}
+
+/**
+ * PUT /api/keywords
+ * 更新关键词库
+ */
+export async function PUT(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { id, action, keyword, keywords, ...data } = body;
+
+    if (!id) {
+      return NextResponse.json({ error: '缺少关键词库ID' }, { status: 400 });
+    }
+
+    // 添加关键词
+    if (action === 'addKeywords' && keywords) {
+      const library = await addKeywordsToLibrary(id, keywords);
+      if (!library) {
+        return NextResponse.json({ error: '添加关键词失败' }, { status: 500 });
+      }
+      return NextResponse.json({ library });
+    }
+
+    // 删除单个关键词
+    if (action === 'removeKeyword' && keyword) {
+      const library = await removeKeywordFromLibrary(id, keyword);
+      if (!library) {
+        return NextResponse.json({ error: '删除关键词失败' }, { status: 500 });
+      }
+      return NextResponse.json({ library });
+    }
+
+    // 更新关键词库信息
+    const input: UpdateKeywordLibraryInput = {
+      name: data.name,
+      description: data.description,
+      keywords: data.keywords,
+    };
+
+    const library = await updateKeywordLibrary(id, input);
+    if (!library) {
+      return NextResponse.json({ error: '更新关键词库失败' }, { status: 500 });
+    }
+    return NextResponse.json({ library });
+  } catch (error) {
+    console.error('更新关键词库失败:', error);
+    return NextResponse.json({ error: '更新关键词库失败' }, { status: 500 });
+  }
+}
+
+/**
+ * DELETE /api/keywords
+ * 删除关键词库
+ */
+export async function DELETE(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+
+    if (!id) {
+      return NextResponse.json({ error: '缺少关键词库ID' }, { status: 400 });
+    }
+
+    const success = await deleteKeywordLibrary(id);
+    if (!success) {
+      return NextResponse.json({ error: '删除关键词库失败' }, { status: 500 });
+    }
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('删除关键词库失败:', error);
+    return NextResponse.json({ error: '删除关键词库失败' }, { status: 500 });
+  }
 }

@@ -60,8 +60,8 @@ export function ContentAudit({
   platform,
   onAuditComplete,
 }: ContentAuditProps) {
-  const [selectedIndustry, setSelectedIndustry] = useState(industry || '');
-  const [selectedPlatform, setSelectedPlatform] = useState(platform || '');
+  const [selectedIndustry, setSelectedIndustry] = useState(industry || undefined);
+  const [selectedPlatform, setSelectedPlatform] = useState(platform || undefined);
   const [auditing, setAuditing] = useState(false);
   const [result, setResult] = useState<AuditResult | null>(null);
   const [open, setOpen] = useState(false);

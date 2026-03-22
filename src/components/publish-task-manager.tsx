@@ -76,13 +76,6 @@ interface PublishResult {
   publishedAt?: string;
 }
 
-interface PlatformCheck {
-  platform: string;
-  accountName: string;
-  canPublish: boolean;
-  reason?: string;
-}
-
 interface PublishPlan {
   id: string;
   businessId: string;
@@ -144,6 +137,30 @@ const platformInfo: Record<string, { name: string; icon: string; autoType?: stri
 const WEEKDAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
 export function PublishTaskManager({ businessId }: PublishTaskManagerProps) {
+  // 检测是否在 Electron 环境
+  const [isElectron, setIsElectron] = useState(false);
+  
+  // 调度器状态（仅桌面端）
+  const [schedulerStatus, setSchedulerStatus] = useState<{
+    isRunning: boolean;
+    currentTask: {
+      taskId: string;
+      taskName: string;
+      status: string;
+      progress: number;
+      results: any[];
+    } | null;
+  } | null>(null);
+  
+  // 实时任务状态（桌面端）
+  const [realtimeTask, setRealtimeTask] = useState<{
+    taskId: string;
+    taskName: string;
+    status: 'running' | 'completed' | 'failed';
+    progress?: number;
+    results?: PublishResult[];
+  } | null>(null);
+  
   // 状态
   const [plans, setPlans] = useState<PublishPlan[]>([]);
   const [stats, setStats] = useState({
@@ -160,12 +177,23 @@ export function PublishTaskManager({ businessId }: PublishTaskManagerProps) {
   
   // 自动化发布状态
   const [executingPlanId, setExecutingPlanId] = useState<string | null>(null);
-  const [executeProgress, setExecuteProgress] = useState(0);
-  const [executeResults, setExecuteResults] = useState<PublishResult[]>([]);
-  const [showResultDialog, setShowResultDialog] = useState(false);
-  const [platformChecks, setPlatformChecks] = useState<PlatformCheck[]>([]);
-  const [showCheckDialog, setShowCheckDialog] = useState(false);
-  const [checkingPlanId, setCheckingPlanId] = useState<string | null>(null);
+
+  // 检测 Electron 环境
+  useEffect(() => {
+    const checkElectron = async () => {
+      if (typeof window !== 'undefined' && window.electronAPI) {
+        const result = await window.electronAPI.isElectron();
+        setIsElectron(result);
+        
+        if (result) {
+          // 获取调度器状态
+          const status = await window.electronAPI.getSchedulerStatus();
+          setSchedulerStatus(status);
+        }
+      }
+    };
+    checkElectron();
+  }, []);
 
   // 加载发布计划列表
   const loadPlans = useCallback(async () => {
@@ -201,62 +229,74 @@ export function PublishTaskManager({ businessId }: PublishTaskManagerProps) {
     return () => clearInterval(interval);
   }, [loadPlans]);
 
-  // 检查计划是否可以自动发布
-  const checkAutoPublish = async (planId: string) => {
-    setCheckingPlanId(planId);
-    try {
-      const res = await fetch(`/api/publish-tasks/${planId}/execute`);
-      const data = await res.json();
-      
-      if (data.success) {
-        setPlatformChecks(data.data.platforms);
-        setShowCheckDialog(true);
-      }
-    } catch (error) {
-      console.error('检查发布能力失败:', error);
-    } finally {
-      setCheckingPlanId(null);
-    }
-  };
+  // 监听调度器事件（桌面端）
+  useEffect(() => {
+    if (!isElectron || !window.electronAPI) return;
 
-  // 执行发布
-  const executePublish = async (planId: string) => {
+    // 任务开始
+    const unsubStarted = window.electronAPI.onTaskStarted((data) => {
+      setRealtimeTask({
+        taskId: data.taskId,
+        taskName: data.taskName,
+        status: 'running',
+      });
+      // 刷新计划列表
+      loadPlans();
+    });
+
+    // 任务完成
+    const unsubCompleted = window.electronAPI.onTaskCompleted((data) => {
+      setRealtimeTask({
+        taskId: data.taskId,
+        taskName: data.taskName,
+        status: 'completed',
+        results: data.results,
+      });
+      // 刷新计划列表
+      loadPlans();
+    });
+
+    // 任务失败
+    const unsubFailed = window.electronAPI.onTaskFailed((data) => {
+      setRealtimeTask({
+        taskId: data.taskId,
+        taskName: data.taskName,
+        status: 'failed',
+      });
+    });
+
+    // 调度器状态变化
+    const unsubStatus = window.electronAPI.onSchedulerStatus((data) => {
+      console.log('[PublishTaskManager] 调度器状态:', data);
+    });
+
+    return () => {
+      unsubStarted();
+      unsubCompleted();
+      unsubFailed();
+      unsubStatus();
+    };
+  }, [isElectron, loadPlans]);
+
+  // 立即执行发布（仅桌面端）
+  const executeImmediately = async (planId: string) => {
+    if (!isElectron || !window.electronAPI) {
+      return;
+    }
+    
     setExecutingPlanId(planId);
-    setExecuteProgress(0);
-    setExecuteResults([]);
-    setShowCheckDialog(false);
     
     try {
-      const res = await fetch(`/api/publish-tasks/${planId}/execute`, {
-        method: 'POST',
-      });
+      const result = await window.electronAPI.executeTaskImmediately(planId);
       
-      const data = await res.json();
-      
-      if (data.success) {
-        setExecuteProgress(100);
-        setExecuteResults(data.data.results || []);
-        setShowResultDialog(true);
-        
+      if (result.success) {
         // 刷新列表
         loadPlans();
       } else {
-        setExecuteResults([{
-          platform: 'unknown',
-          accountId: '',
-          status: 'failed',
-          error: data.error || '发布失败',
-        }]);
-        setShowResultDialog(true);
+        console.error('执行失败:', result.error);
       }
     } catch (error: any) {
-      setExecuteResults([{
-        platform: 'unknown',
-        accountId: '',
-        status: 'failed',
-        error: error.message || '请求失败',
-      }]);
-      setShowResultDialog(true);
+      console.error('执行发布失败:', error);
     } finally {
       setExecutingPlanId(null);
     }
@@ -365,6 +405,64 @@ export function PublishTaskManager({ businessId }: PublishTaskManagerProps) {
           </Button>
         </div>
       </div>
+
+      {/* 桌面端调度器状态（仅桌面端显示） */}
+      {isElectron && (
+        <Card className={`border-2 ${realtimeTask?.status === 'running' ? 'border-blue-500 animate-pulse' : 'border-transparent'}`}>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className={`w-3 h-3 rounded-full ${schedulerStatus?.isRunning ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+                <div>
+                  <p className="font-medium">
+                    {schedulerStatus?.isRunning ? '后台调度器运行中' : '后台调度器已停止'}
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    每60秒自动检查待执行任务
+                  </p>
+                </div>
+              </div>
+              
+              {/* 实时任务状态 */}
+              {realtimeTask && (
+                <div className="flex items-center gap-3">
+                  {realtimeTask.status === 'running' && (
+                    <div className="flex items-center gap-2 text-blue-600">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>正在执行: {realtimeTask.taskName}</span>
+                    </div>
+                  )}
+                  {realtimeTask.status === 'completed' && (
+                    <div className="flex items-center gap-2 text-green-600">
+                      <CheckCircle2 className="h-4 w-4" />
+                      <span>已完成: {realtimeTask.taskName}</span>
+                    </div>
+                  )}
+                  {realtimeTask.status === 'failed' && (
+                    <div className="flex items-center gap-2 text-red-600">
+                      <XCircle className="h-4 w-4" />
+                      <span>失败: {realtimeTask.taskName}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  if (window.electronAPI) {
+                    await window.electronAPI.triggerSchedulerCheck();
+                  }
+                }}
+              >
+                <RefreshCw className="h-4 w-4 mr-1" />
+                立即检查
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* 统计卡片 */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
@@ -476,21 +574,22 @@ export function PublishTaskManager({ businessId }: PublishTaskManagerProps) {
                         {isExecuting && (
                           <div className="flex items-center gap-2 text-sm text-blue-600">
                             <Loader2 className="h-4 w-4 animate-spin" />
-                            <span>发布中...</span>
-                            <Progress value={executeProgress} className="w-20 h-2" />
+                            <span>执行中...</span>
                           </div>
                         )}
                         {plan.status === 'active' && !isExecuting && (
                           <>
-                            <Button
-                              variant="default"
-                              size="sm"
-                              className="bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600"
-                              onClick={() => checkAutoPublish(plan.id)}
-                            >
-                              <Zap className="h-4 w-4 mr-1" />
-                              自动发布
-                            </Button>
+                            {isElectron && (
+                              <Button
+                                variant="default"
+                                size="sm"
+                                className="bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600"
+                                onClick={() => executeImmediately(plan.id)}
+                              >
+                                <Zap className="h-4 w-4 mr-1" />
+                                立即执行
+                              </Button>
+                            )}
                             <Button
                               variant="outline"
                               size="sm"
@@ -609,168 +708,6 @@ export function PublishTaskManager({ businessId }: PublishTaskManagerProps) {
           loadPlans();
         }}
       />
-
-      {/* 发布前检查对话框 */}
-      <Dialog open={showCheckDialog} onOpenChange={setShowCheckDialog}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Zap className="h-5 w-5 text-blue-500" />
-              自动发布确认
-            </DialogTitle>
-            <DialogDescription>
-              系统将自动发布到以下平台，请确认账号授权状态
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="space-y-3 py-4">
-            {platformChecks.map((check, idx) => {
-              const info = platformInfo[check.platform] || { name: check.platform, icon: '?' };
-              return (
-                <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                  <div className="flex items-center gap-3">
-                    <span className="w-8 h-8 rounded bg-primary/10 flex items-center justify-center font-medium">
-                      {info.icon}
-                    </span>
-                    <div>
-                      <p className="font-medium">{info.name}</p>
-                      <p className="text-sm text-gray-500">{check.accountName}</p>
-                    </div>
-                  </div>
-                  {check.canPublish ? (
-                    <Badge className="bg-green-100 text-green-800">
-                      <ShieldCheck className="h-3 w-3 mr-1" />
-                      已授权
-                    </Badge>
-                  ) : (
-                    <div className="text-right">
-                      <Badge className="bg-red-100 text-red-800">
-                        <ShieldAlert className="h-3 w-3 mr-1" />
-                        未授权
-                      </Badge>
-                      {check.reason && (
-                        <p className="text-xs text-gray-500 mt-1">{check.reason}</p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCheckDialog(false)}>
-              取消
-            </Button>
-            <Button 
-              onClick={() => {
-                const planId = checkingPlanId || plans.find(p => platformChecks.length > 0)?.id;
-                if (planId) executePublish(planId);
-              }}
-              disabled={!platformChecks.every(c => c.canPublish) || executingPlanId !== null}
-              className="bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600"
-            >
-              {executingPlanId ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  发布中...
-                </>
-              ) : (
-                <>
-                  <Zap className="h-4 w-4 mr-2" />
-                  确认发布
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* 发布结果对话框 */}
-      <Dialog open={showResultDialog} onOpenChange={setShowResultDialog}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              {executeResults.every(r => r.status === 'success') ? (
-                <>
-                  <CheckCircle2 className="h-5 w-5 text-green-500" />
-                  发布成功
-                </>
-              ) : (
-                <>
-                  <AlertCircle className="h-5 w-5 text-yellow-500" />
-                  发布完成
-                </>
-              )}
-            </DialogTitle>
-            <DialogDescription>
-              发布任务已完成，以下是各平台的发布结果
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="space-y-3 py-4">
-            {executeResults.map((result, idx) => {
-              const info = platformInfo[result.platform] || { name: result.platform, icon: '?' };
-              return (
-                <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                  <div className="flex items-center gap-3">
-                    <span className="w-8 h-8 rounded bg-primary/10 flex items-center justify-center font-medium">
-                      {info.icon}
-                    </span>
-                    <div>
-                      <p className="font-medium">{info.name}</p>
-                      <p className="text-sm text-gray-500">{result.accountName || '账号'}</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    {result.status === 'success' ? (
-                      <div>
-                        <Badge className="bg-green-100 text-green-800">
-                          <CheckCircle2 className="h-3 w-3 mr-1" />
-                          发布成功
-                        </Badge>
-                        {result.publishedUrl && (
-                          <a 
-                            href={result.publishedUrl} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="block text-xs text-blue-500 hover:underline mt-1"
-                          >
-                            <ExternalLink className="h-3 w-3 inline mr-1" />
-                            查看文章
-                          </a>
-                        )}
-                      </div>
-                    ) : result.status === 'pending' ? (
-                      <Badge className="bg-yellow-100 text-yellow-800">
-                        待处理
-                      </Badge>
-                    ) : (
-                      <div>
-                        <Badge className="bg-red-100 text-red-800">
-                          <XCircle className="h-3 w-3 mr-1" />
-                          发布失败
-                        </Badge>
-                        {result.error && (
-                          <p className="text-xs text-red-500 mt-1 max-w-[150px] truncate" title={result.error}>
-                            {result.error}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          
-          <DialogFooter>
-            <Button onClick={() => setShowResultDialog(false)}>
-              关闭
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* 删除确认对话框 */}
       <AlertDialog open={!!planToDelete} onOpenChange={() => setPlanToDelete(null)}>

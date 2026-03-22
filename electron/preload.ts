@@ -59,7 +59,7 @@ const electronAPI = {
 
   // 手动确认登录成功（在登录窗口中调用）
   manualConfirmLogin: (platform: string): Promise<{ success: boolean; account?: any; error?: string }> => {
-    return ipcRenderer.invoke('manual-confirm-login', platform);
+    return ipcRenderer.invoke('login-confirm', platform);
   },
 
   // 平台配置
@@ -310,6 +310,13 @@ const electronAPI = {
     return () => {
       ipcRenderer.removeListener('creation-plan-failed', callback as any);
     };
+  },
+
+  // ====== 立即执行任务 ======
+
+  // 立即执行指定发布任务
+  executeTaskImmediately: (taskId: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('execute-task-immediately', taskId);
   },
 };
 

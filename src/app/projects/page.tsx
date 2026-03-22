@@ -2,21 +2,19 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
+import { Input } from '@/components/ui/input';
 import { AppLayout } from '@/components/app-layout';
+import { useBusiness } from '@/contexts/business-context';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   Table,
   TableBody,
@@ -50,168 +48,229 @@ import {
   Copy,
   ExternalLink,
   Trash2,
-  Loader2
+  Loader2,
+  Search,
+  RotateCcw,
+  Inbox,
+  Edit,
+  ListChecks,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import type { GEOProject } from '@/lib/types';
+
+// 文章类型定义
+interface Article {
+  id: string;
+  title: string;
+  rule: string;
+  source: string;
+  isPublished: boolean;
+  createdAt: Date;
+  type: string;
+  tags: string[];
+}
+
+// 统计数据
+interface Stats {
+  total: number;
+  published: number;
+  active: number;
+  avgScore: number;
+  totalCitations: number;
+}
 
 export default function ProjectsPage() {
-  const [projects, setProjects] = useState<GEOProject[]>([]);
+  const { selectedBusiness } = useBusiness();
+  const [articles, setArticles] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'active' | 'paused' | 'completed' | 'draft'>('all');
-  const [publishingId, setPublishingId] = useState<string | null>(null);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [projectToDelete, setProjectToDelete] = useState<GEOProject | null>(null);
-  const [deleting, setDeleting] = useState(false);
+  const [stats, setStats] = useState<Stats>({
+    total: 0,
+    published: 0,
+    active: 0,
+    avgScore: 0,
+    totalCitations: 0,
+  });
+
+  // 筛选状态
+  const [titleFilter, setTitleFilter] = useState('');
+  const [ruleFilter, setRuleFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [tagFilter, setTagFilter] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
 
   useEffect(() => {
-    fetchProjects();
-  }, []);
+    if (selectedBusiness) {
+      fetchData();
+    }
+  }, [selectedBusiness]);
 
-  const fetchProjects = async () => {
+  const fetchData = async () => {
+    if (!selectedBusiness) return;
+    
+    setLoading(true);
     try {
-      const response = await fetch('/api/projects');
-      const data = await response.json();
-      if (data.success) {
-        setProjects(data.data);
+      // 并行获取文章列表和统计信息
+      const [draftsRes, statsRes] = await Promise.all([
+        fetch(`/api/content-drafts?businessId=${selectedBusiness}`),
+        fetch(`/api/content-drafts?businessId=${selectedBusiness}&stats=true`),
+      ]);
+
+      if (!draftsRes.ok || !statsRes.ok) {
+        throw new Error('获取数据失败');
       }
+
+      const draftsData = await draftsRes.json();
+      const statsData = await statsRes.json();
+
+      // 转换数据格式
+      const formattedArticles: Article[] = (draftsData.drafts || []).map((draft: any) => {
+        // 处理 distillationWords，可能是字符串或数组
+        let tags: string[] = [];
+        if (draft.distillationWords) {
+          if (Array.isArray(draft.distillationWords)) {
+            tags = draft.distillationWords.slice(0, 3);
+          } else if (typeof draft.distillationWords === 'string') {
+            tags = draft.distillationWords.split(',').slice(0, 3);
+          }
+        }
+        
+        return {
+          id: draft.id,
+          title: draft.title,
+          rule: draft.targetModel || '默认规则',
+          source: draft.articleType || 'AI创作',
+          isPublished: draft.status === 'published',
+          createdAt: new Date(draft.createdAt),
+          type: draft.articleType || '文章',
+          tags,
+        };
+      });
+
+      setArticles(formattedArticles);
+      setStats({
+        total: statsData.stats?.total || formattedArticles.length,
+        published: statsData.stats?.published || formattedArticles.filter(a => a.isPublished).length,
+        active: statsData.stats?.ready || 0,
+        avgScore: statsData.stats?.avgSeoScore || 0,
+        totalCitations: statsData.stats?.totalCitations || 0,
+      });
     } catch (error) {
-      console.error('获取项目失败:', error);
+      console.error('获取数据失败:', error);
+      toast.error('获取数据失败');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleTogglePublish = async (projectId: string, currentStatus: boolean) => {
-    setPublishingId(projectId);
-    try {
-      const response = await fetch(`/api/projects/${projectId}/publish`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isPublic: !currentStatus })
-      });
-      
-      const data = await response.json();
-      if (data.success) {
-        // 更新本地状态
-        setProjects(projects.map(p => 
-          p.id === projectId 
-            ? { ...p, isPublic: !currentStatus, publishedAt: data.isPublic ? new Date() : undefined }
-            : p
-        ));
-      }
-    } catch (error) {
-      console.error('发布失败:', error);
-    } finally {
-      setPublishingId(null);
-    }
+  // 重置筛选
+  const handleReset = () => {
+    setTitleFilter('');
+    setRuleFilter('');
+    setTypeFilter('all');
+    setTagFilter('');
+    setSourceFilter('all');
+    setStatusFilter('all');
   };
 
-  const handleCopyLink = (projectId: string) => {
-    const url = `${window.location.origin}/content/${projectId}`;
+  // 查询筛选
+  const handleSearch = () => {
+    // TODO: 实现筛选逻辑
+    toast.success('查询完成');
+  };
+
+  // 筛选后的文章
+  const filteredArticles = articles.filter(article => {
+    if (titleFilter && !article.title.includes(titleFilter)) return false;
+    if (ruleFilter && !article.rule.includes(ruleFilter)) return false;
+    if (typeFilter !== 'all' && article.type !== typeFilter) return false;
+    if (tagFilter && !article.tags.some(tag => tag.includes(tagFilter))) return false;
+    if (sourceFilter !== 'all' && article.source !== sourceFilter) return false;
+    if (statusFilter !== 'all') {
+      if (statusFilter === 'published' && !article.isPublished) return false;
+      if (statusFilter === 'unpublished' && article.isPublished) return false;
+    }
+    return true;
+  });
+
+  // 格式化时间
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  // 复制链接
+  const handleCopyLink = (articleId: string) => {
+    const url = `${window.location.origin}/content/${articleId}`;
     navigator.clipboard.writeText(url);
     toast.success('链接已复制到剪贴板');
   };
 
-  const handleDeleteClick = (project: GEOProject) => {
-    setProjectToDelete(project);
-    setDeleteDialogOpen(true);
+  // 查看文章
+  const handleViewArticle = (articleId: string) => {
+    window.open(`/content-drafts/${articleId}`, '_blank');
   };
 
-  const handleDeleteConfirm = async () => {
-    if (!projectToDelete) return;
-    
-    setDeleting(true);
+  // 编辑文章
+  const handleEditArticle = (articleId: string) => {
+    window.open(`/content-drafts/${articleId}?edit=true`, '_blank');
+  };
+
+  // 预览文章
+  const handlePreviewArticle = (articleId: string) => {
+    window.open(`/content-drafts/${articleId}?preview=true`, '_blank');
+  };
+
+  // 删除文章
+  const handleDeleteArticle = async (articleId: string) => {
+    if (!confirm('确定要删除这篇文章吗？此操作不可撤销。')) {
+      return;
+    }
+
     try {
-      const response = await fetch(`/api/projects/${projectToDelete.id}`, {
+      const response = await fetch(`/api/content-drafts?id=${articleId}`, {
         method: 'DELETE',
       });
-      
-      const data = await response.json();
-      if (data.success) {
-        // 从本地状态中移除项目
-        setProjects(projects.filter(p => p.id !== projectToDelete.id));
-        setDeleteDialogOpen(false);
-        toast.success('项目已删除', {
-          description: `「${projectToDelete.title}」已被永久删除`,
-        });
-        setProjectToDelete(null);
-      } else {
-        toast.error('删除失败', {
-          description: data.error || '请稍后重试',
-        });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || '删除失败');
       }
+
+      toast.success('文章已删除');
+      fetchData(); // 刷新列表
     } catch (error) {
-      console.error('删除失败:', error);
-      toast.error('删除失败', {
-        description: '网络错误，请稍后重试',
-      });
-    } finally {
-      setDeleting(false);
+      console.error('删除文章失败:', error);
+      toast.error(error instanceof Error ? error.message : '删除失败');
     }
-  };
-
-  const filteredProjects = filter === 'all' 
-    ? projects 
-    : projects.filter(p => p.status === filter);
-
-  const getStatusBadge = (status: GEOProject['status']) => {
-    const config = {
-      active: { label: '运行中', color: 'bg-green-500', icon: Play },
-      paused: { label: '已暂停', color: 'bg-yellow-500', icon: Pause },
-      completed: { label: '已完成', color: 'bg-blue-500', icon: CheckCircle2 },
-      draft: { label: '草稿', color: 'bg-gray-500', icon: Clock }
-    };
-    const { label, color, icon: Icon } = config[status];
-    return (
-      <Badge className={`${color} text-white gap-1`}>
-        <Icon className="h-3 w-3" />
-        {label}
-      </Badge>
-    );
-  };
-
-  const getGradeColor = (grade: string) => {
-    if (grade.startsWith('A')) return 'text-green-600';
-    if (grade.startsWith('B')) return 'text-blue-600';
-    if (grade.startsWith('C')) return 'text-yellow-600';
-    return 'text-red-600';
-  };
-
-  const stats = {
-    total: projects.length,
-    active: projects.filter(p => p.status === 'active').length,
-    avgScore: projects.length > 0 
-      ? (projects.reduce((sum, p) => sum + p.score, 0) / projects.length).toFixed(1)
-      : 0,
-    totalCitations: projects.reduce((sum, p) => sum + p.monitoring.summary.totalCitations, 0),
-    published: projects.filter(p => p.isPublic).length
   };
 
   return (
     <AppLayout>
       <div className="max-w-6xl mx-auto px-6 py-8">
-        {/* 头部 */}
-        <div className="flex items-center justify-between mb-8">
+        {/* 页面标题 */}
+        <div className="mb-6 flex items-start justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-800 dark:text-white mb-2">
-              内容管理
+              所有文章
             </h1>
             <p className="text-slate-600 dark:text-slate-400">
-              管理和监测所有GEO优化项目
+              浏览您到目前为止生成的所有文章。
             </p>
           </div>
-          <div className="flex gap-3">
-            <Link href="/matrix">
-              <Button className="bg-purple-500 hover:bg-purple-600">
-                <Plus className="h-4 w-4 mr-2" />
-                新建内容
-              </Button>
-            </Link>
-          </div>
+          <Link href="/matrix/generation-plans">
+            <Button variant="outline" size="sm">
+              <ListChecks className="h-4 w-4 mr-2" />
+              生成计划
+            </Button>
+          </Link>
         </div>
 
-        {/* 统计卡片 */}
+        {/* 统计卡片 - 监测功能 */}
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
           <Card className="bg-white dark:bg-gray-800">
             <CardContent className="pt-6">
@@ -274,144 +333,138 @@ export default function ProjectsPage() {
           </Card>
         </div>
 
-        {/* 筛选器 */}
-        <div className="flex gap-2 mb-6">
-          <Button
-            variant={filter === 'all' ? 'default' : 'outline'}
-            onClick={() => setFilter('all')}
-            size="sm"
-          >
-            全部
-          </Button>
-          <Button
-            variant={filter === 'active' ? 'default' : 'outline'}
-            onClick={() => setFilter('active')}
-            size="sm"
-          >
-            运行中
-          </Button>
-          <Button
-            variant={filter === 'paused' ? 'default' : 'outline'}
-            onClick={() => setFilter('paused')}
-            size="sm"
-          >
-            已暂停
-          </Button>
-          <Button
-            variant={filter === 'completed' ? 'default' : 'outline'}
-            onClick={() => setFilter('completed')}
-            size="sm"
-          >
-            已完成
-          </Button>
-        </div>
+        {/* 筛选栏 */}
+        <Card className="bg-white dark:bg-gray-800 mb-6">
+          <CardContent className="p-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+              <Input
+                placeholder="按标题筛选"
+                value={titleFilter}
+                onChange={(e) => setTitleFilter(e.target.value)}
+                className="lg:col-span-1"
+              />
+              <Input
+                placeholder="按生成规则筛选"
+                value={ruleFilter}
+                onChange={(e) => setRuleFilter(e.target.value)}
+                className="lg:col-span-1"
+              />
+              <Select value={typeFilter} onValueChange={setTypeFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="按文章类型筛选" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部类型</SelectItem>
+                  <SelectItem value="科普">科普</SelectItem>
+                  <SelectItem value="指南">指南</SelectItem>
+                  <SelectItem value="教程">教程</SelectItem>
+                  <SelectItem value="评测">评测</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                placeholder="按标签过滤"
+                value={tagFilter}
+                onChange={(e) => setTagFilter(e.target.value)}
+              />
+              <Select value={sourceFilter} onValueChange={setSourceFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="按来源过滤" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部来源</SelectItem>
+                  <SelectItem value="AI智能创作">AI智能创作</SelectItem>
+                  <SelectItem value="批量创作">批量创作</SelectItem>
+                  <SelectItem value="模板创作">模板创作</SelectItem>
+                  <SelectItem value="GEO优化">GEO优化</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="所有" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">所有</SelectItem>
+                  <SelectItem value="published">已发布</SelectItem>
+                  <SelectItem value="unpublished">未发布</SelectItem>
+                </SelectContent>
+              </Select>
+              <div className="flex gap-2">
+                <Button onClick={handleSearch} className="flex-1 bg-blue-600 hover:bg-blue-700">
+                  查询
+                </Button>
+                <Button variant="outline" onClick={handleReset}>
+                  <RotateCcw className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
-        {/* 项目列表 */}
+        {/* 文章列表 */}
         <Card className="bg-white dark:bg-gray-800">
-          <CardHeader>
-            <CardTitle>项目列表</CardTitle>
-            <CardDescription>
-              共 {filteredProjects.length} 个项目
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+          <CardContent className="p-0">
             {loading ? (
-              <div className="text-center py-8 text-gray-500">加载中...</div>
-            ) : filteredProjects.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <FileText className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                <p>暂无项目</p>
+              <div className="text-center py-12 text-gray-500">
+                <Loader2 className="h-8 w-8 mx-auto mb-3 animate-spin" />
+                <p>加载中...</p>
+              </div>
+            ) : filteredArticles.length === 0 ? (
+              <div className="text-center py-16">
+                <Inbox className="h-16 w-16 mx-auto mb-4 text-gray-300" />
+                <p className="text-gray-500">暂无数据</p>
               </div>
             ) : (
               <Table>
                 <TableHeader>
-                  <TableRow>
-                    <TableHead>项目名称</TableHead>
-                    <TableHead>评分</TableHead>
-                    <TableHead>状态</TableHead>
-                    <TableHead>发布</TableHead>
-                    <TableHead>引用次数</TableHead>
-                    <TableHead>曝光量</TableHead>
-                    <TableHead>更新时间</TableHead>
-                    <TableHead className="text-right">操作</TableHead>
+                  <TableRow className="bg-gray-50 dark:bg-gray-900">
+                    <TableHead className="font-medium">标题</TableHead>
+                    <TableHead className="font-medium">规则</TableHead>
+                    <TableHead className="font-medium">来源</TableHead>
+                    <TableHead className="font-medium">是否发布</TableHead>
+                    <TableHead className="font-medium">时间</TableHead>
+                    <TableHead className="text-right font-medium">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredProjects.map((project) => (
-                    <TableRow key={project.id}>
+                  {filteredArticles.map((article) => (
+                    <TableRow key={article.id}>
                       <TableCell>
                         <div>
                           <p className="font-medium text-gray-900 dark:text-white">
-                            {project.title}
+                            {article.title}
                           </p>
-                          <p className="text-sm text-gray-500">
-                            {project.author && `作者: ${project.author}`}
-                          </p>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span className={`text-xl font-bold ${getGradeColor(project.grade)}`}>
-                            {project.score.toFixed(1)}
-                          </span>
-                          <Badge variant="outline">{project.grade}</Badge>
-                        </div>
-                      </TableCell>
-                      <TableCell>{getStatusBadge(project.status)}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          {project.isPublic ? (
-                            <>
-                              <Badge className="bg-green-500 text-white gap-1">
-                                <Globe className="h-3 w-3" />
-                                已发布
-                              </Badge>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleCopyLink(project.id)}
-                                title="复制链接"
-                              >
-                                <Copy className="h-4 w-4" />
-                              </Button>
-                              <Link
-                                href={`/content/${project.id}`}
-                                target="_blank"
-                              >
-                                <Button variant="ghost" size="sm" title="查看公开页面">
-                                  <ExternalLink className="h-4 w-4" />
-                                </Button>
-                              </Link>
-                            </>
-                          ) : (
-                            <Badge variant="outline" className="gap-1">
-                              <Lock className="h-3 w-3" />
-                              未发布
-                            </Badge>
+                          {article.tags.length > 0 && (
+                            <div className="flex gap-1 mt-1">
+                              {article.tags.map((tag, index) => (
+                                <Badge key={index} variant="secondary" className="text-xs">
+                                  {tag}
+                                </Badge>
+                              ))}
+                            </div>
                           )}
                         </div>
                       </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1">
-                          <TrendingUp className="h-4 w-4 text-green-500" />
-                          <span className="font-medium">
-                            {project.monitoring.summary.totalCitations}
-                          </span>
-                        </div>
+                      <TableCell className="text-gray-600 dark:text-gray-400">
+                        {article.rule}
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-1">
-                          <Eye className="h-4 w-4 text-blue-500" />
-                          <span className="font-medium">
-                            {project.monitoring.summary.totalExposure.toLocaleString()}
-                          </span>
-                        </div>
+                        <Badge variant="outline">{article.source}</Badge>
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-1 text-sm text-gray-500">
-                          <Calendar className="h-4 w-4" />
-                          {new Date(project.updatedAt).toLocaleDateString()}
-                        </div>
+                        {article.isPublished ? (
+                          <Badge className="bg-green-500 text-white">
+                            <Globe className="h-3 w-3 mr-1" />
+                            已发布
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary">
+                            <Lock className="h-3 w-3 mr-1" />
+                            未发布
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-gray-500 text-sm">
+                        {formatDate(article.createdAt)}
                       </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>
@@ -420,39 +473,30 @@ export default function ProjectsPage() {
                               <MoreVertical className="h-4 w-4" />
                             </Button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent>
-                            <DropdownMenuItem onClick={() => handleTogglePublish(project.id, project.isPublic)}>
-                              {project.isPublic ? (
-                                <>
-                                  <Lock className="h-4 w-4 mr-2" />
-                                  取消发布
-                                </>
-                              ) : (
-                                <>
-                                  <Globe className="h-4 w-4 mr-2" />
-                                  发布内容
-                                </>
-                              )}
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => handleViewArticle(article.id)}>
+                              <Eye className="h-4 w-4 mr-2" />
+                              查看文章
                             </DropdownMenuItem>
-                            <DropdownMenuItem>
-                              <Link href={`/monitoring/${project.id}`} className="flex items-center w-full">
-                                <BarChart3 className="h-4 w-4 mr-2" />
-                                查看监测数据
-                              </Link>
+                            <DropdownMenuItem onClick={() => handleEditArticle(article.id)}>
+                              <Edit className="h-4 w-4 mr-2" />
+                              编辑文章
                             </DropdownMenuItem>
-                            <DropdownMenuItem>
-                              <Link href={`/?edit=${project.id}`} className="flex items-center w-full">
-                                <FileText className="h-4 w-4 mr-2" />
-                                编辑项目
-                              </Link>
+                            <DropdownMenuItem onClick={() => handleCopyLink(article.id)}>
+                              <Copy className="h-4 w-4 mr-2" />
+                              复制链接
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handlePreviewArticle(article.id)}>
+                              <ExternalLink className="h-4 w-4 mr-2" />
+                              预览文章
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem 
-                              className="text-red-600 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950"
-                              onClick={() => handleDeleteClick(project)}
+                              className="text-red-600"
+                              onClick={() => handleDeleteArticle(article.id)}
                             >
                               <Trash2 className="h-4 w-4 mr-2" />
-                              删除项目
+                              删除文章
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -465,34 +509,12 @@ export default function ProjectsPage() {
           </CardContent>
         </Card>
 
-        {/* 删除确认对话框 */}
-        <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>确认删除</AlertDialogTitle>
-              <AlertDialogDescription>
-                确定要删除项目「{projectToDelete?.title}」吗？此操作无法撤销，项目数据将被永久删除。
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={handleDeleteConfirm}
-                disabled={deleting}
-                className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
-              >
-                {deleting ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    删除中...
-                  </>
-                ) : (
-                  '确认删除'
-                )}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        {/* 新建内容按钮 */}
+        <Link href="/matrix/batch/create">
+          <Button className="fixed bottom-8 right-8 bg-purple-500 hover:bg-purple-600 shadow-lg rounded-full w-14 h-14">
+            <Plus className="h-6 w-6" />
+          </Button>
+        </Link>
       </div>
     </AppLayout>
   );

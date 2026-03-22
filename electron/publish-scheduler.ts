@@ -139,6 +139,95 @@ export class PublishScheduler {
   }
 
   /**
+   * 立即执行指定任务（手动触发）
+   */
+  async executeTaskImmediately(taskId: string): Promise<{ success: boolean; error?: string }> {
+    console.log(`[PublishScheduler] 立即执行任务: ${taskId}`);
+
+    if (this.currentTask && this.currentTask.status === 'running') {
+      return { success: false, error: '当前有任务正在执行中，请稍后再试' };
+    }
+
+    try {
+      // 获取任务详情
+      const task = await this.getTaskById(taskId);
+      
+      if (!task) {
+        return { success: false, error: '任务不存在' };
+      }
+
+      // 执行任务
+      await this.executeTask(task);
+      
+      return { success: true };
+    } catch (error: any) {
+      console.error(`[PublishScheduler] 立即执行任务失败: ${taskId}`, error);
+      return { success: false, error: error.message || '执行失败' };
+    }
+  }
+
+  /**
+   * 根据ID获取任务详情
+   */
+  private async getTaskById(taskId: string): Promise<PublishTask | null> {
+    return new Promise((resolve) => {
+      const url = new URL(`/api/publish-tasks/${taskId}`, this.apiBaseUrl);
+      const isHttps = url.protocol === 'https:';
+      const lib = isHttps ? https : http;
+
+      const req = lib.request({
+        hostname: url.hostname,
+        port: url.port || (isHttps ? 443 : 80),
+        path: url.pathname,
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(data);
+            if (json.data) {
+              const task = json.data;
+              resolve({
+                id: task.id,
+                businessId: task.businessId,
+                planId: task.planId,
+                taskName: task.taskName || task.planName,
+                title: task.title,
+                content: task.content,
+                images: task.images || [],
+                tags: task.tags || [],
+                targetPlatforms: task.targetPlatforms || task.targetAccount || [],
+                scheduledAt: task.scheduledAt,
+                status: task.status,
+                priority: task.priority || 5,
+              });
+            } else {
+              resolve(null);
+            }
+          } catch (e) {
+            console.error('[PublishScheduler] 解析任务数据失败:', e);
+            resolve(null);
+          }
+        });
+      });
+
+      req.on('error', (error) => {
+        console.error('[PublishScheduler] 获取任务失败:', error);
+        resolve(null);
+      });
+
+      req.setTimeout(10000, () => {
+        req.destroy();
+        resolve(null);
+      });
+
+      req.end();
+    });
+  }
+
+  /**
    * 检查并执行待执行任务
    */
   private async checkAndExecute(): Promise<void> {

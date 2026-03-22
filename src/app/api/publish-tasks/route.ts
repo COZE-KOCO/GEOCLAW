@@ -20,7 +20,6 @@ import {
   type UpdatePublishTaskInput,
   type TaskStatus,
 } from '@/lib/publish-task-store';
-import { executePublishTask } from '@/lib/publish-executor';
 
 /**
  * GET /api/publish-tasks
@@ -117,13 +116,8 @@ export async function POST(request: NextRequest) {
         
         const task = await createPublishTask(input);
         
-        // 如果是立即执行，直接启动任务
-        if (task.taskType === 'immediate') {
-          // 异步执行任务
-          executePublishTask(task.id).catch(err => {
-            console.error('执行发布任务失败:', err);
-          });
-        }
+        // 注意：Web端无法执行发布任务，实际发布由桌面端调度器执行
+        // 立即执行类型的任务会被桌面端调度器优先处理
         
         return NextResponse.json({ success: true, data: task });
       }
@@ -187,12 +181,8 @@ export async function POST(request: NextRequest) {
       case 'start': {
         const task = await startPublishTask(data.id);
         
-        if (task) {
-          // 异步执行任务
-          executePublishTask(task.id).catch(err => {
-            console.error('执行发布任务失败:', err);
-          });
-        }
+        // 注意：Web端无法执行发布任务，实际发布由桌面端调度器执行
+        // 启动后的任务会被桌面端调度器识别并处理
         
         return NextResponse.json({ success: !!task, data: task });
       }
@@ -205,53 +195,10 @@ export async function POST(request: NextRequest) {
       case 'retry': {
         const task = await retryPublishTask(data.id);
         
-        if (task) {
-          // 异步执行任务
-          executePublishTask(task.id).catch(err => {
-            console.error('执行发布任务失败:', err);
-          });
-        }
+        // 注意：Web端无法执行发布任务，实际发布由桌面端调度器执行
+        // 重试的任务会被桌面端调度器识别并处理
         
         return NextResponse.json({ success: !!task, data: task });
-      }
-
-      case 'execute': {
-        // 立即执行指定任务
-        const task = await getPublishTaskById(data.id);
-        if (!task) {
-          return NextResponse.json(
-            { success: false, error: '任务不存在' },
-            { status: 404 }
-          );
-        }
-        
-        // 异步执行任务
-        executePublishTask(task.id).catch(err => {
-          console.error('执行发布任务失败:', err);
-        });
-        
-        return NextResponse.json({ 
-          success: true, 
-          message: '任务已开始执行',
-          data: { taskId: task.id }
-        });
-      }
-
-      case 'executePending': {
-        // 执行所有待执行的定时任务
-        const pendingTasks = await getPendingScheduledTasks();
-        
-        for (const task of pendingTasks) {
-          executePublishTask(task.id).catch(err => {
-            console.error(`执行任务 ${task.id} 失败:`, err);
-          });
-        }
-        
-        return NextResponse.json({ 
-          success: true, 
-          message: `已开始执行 ${pendingTasks.length} 个待执行任务`,
-          data: { count: pendingTasks.length }
-        });
       }
 
       default:
