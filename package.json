@@ -22,6 +22,11 @@
     "directories": {
       "output": "release"
     },
+    "files": [
+      "package.json",
+      "dist/electron/**/*",
+      "public/**/*"
+    ],
     "extraResources": [
       {
         "from": ".next",
@@ -32,10 +37,6 @@
         "from": "public",
         "to": "server/public",
         "filter": ["**/*"]
-      },
-      {
-        "from": "package.json",
-        "to": "server/package.json"
       },
       {
         "from": "node_modules/next",
@@ -186,7 +187,7 @@
     "electron-builder": "^26.8.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
-    "only-allow": "^1.2.2",
+    "only-allow": "^2.0.2",
     "react-dev-inspector": "^2.0.1",
     "shadcn": "latest",
     "tailwindcss": "^4",
