@@ -11,6 +11,32 @@ import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { type CreationPlan, type PlanStatus } from '@/lib/creation-plan-store';
 import { type GenerationConfig } from '@/lib/types/generation-config';
 
+/**
+ * 时间窗口匹配函数
+ * 使用时间窗口（前后N分钟）代替精确匹配，避免因调度器检查时机导致错过执行
+ * 
+ * @param scheduledTime 计划执行时间 (HH:mm)
+ * @param currentTime 当前时间 (HH:mm)
+ * @param windowMinutes 时间窗口大小（分钟），默认5分钟
+ */
+function isTimeMatch(scheduledTime: string, currentTime: string, windowMinutes: number = 5): boolean {
+  const [schedHour, schedMin] = scheduledTime.split(':').map(Number);
+  const [currHour, currMin] = currentTime.split(':').map(Number);
+  
+  // 转换为分钟数便于计算
+  const schedMinutes = schedHour * 60 + schedMin;
+  const currMinutes = currHour * 60 + currMin;
+  
+  // 计算时间差
+  const dayMinutes = 24 * 60;
+  const diff = Math.abs(schedMinutes - currMinutes);
+  
+  // 处理跨午夜情况（如 23:55 和 00:05）
+  const circularDiff = Math.min(diff, dayMinutes - diff);
+  
+  return circularDiff <= windowMinutes;
+}
+
 // 数据库记录转前端类型
 function dbToPlan(record: any): CreationPlan {
   return {
@@ -68,6 +94,13 @@ export async function GET(request: NextRequest) {
     const currentDay = now.getDay();
     const currentDate = now.getDate();
     
+    console.log('[PendingPlans] 查询待执行计划:', {
+      currentTime,
+      currentDay,
+      currentDate,
+      businessId,
+    });
+    
     // 查询活跃计划
     let query = supabase
       .from('creation_plans')
@@ -82,23 +115,31 @@ export async function GET(request: NextRequest) {
     const { data: plans, error } = await query;
     
     if (error) {
-      console.error('查询待执行计划失败:', error);
+      console.error('[PendingPlans] 查询失败:', {
+        message: error.message,
+        code: error.code,
+        details: error.details,
+      });
       return NextResponse.json(
-        { success: false, error: '查询失败' },
+        { success: false, error: `查询失败: ${error.message}` },
         { status: 500 }
       );
     }
+    
+    console.log(`[PendingPlans] 查询到 ${plans?.length || 0} 个活跃计划`);
     
     // 过滤符合执行条件的计划
     const pendingPlans = (plans || []).filter(plan => {
       // 检查结束日期
       if (plan.end_date && new Date(plan.end_date) < now) {
+        console.log(`[PendingPlans] 计划 ${plan.id} 已过期，跳过`);
         return false;
       }
       
       // 检查 next_run_at，避免重复执行
       // 如果 next_run_at 存在且大于当前时间，说明还没到执行时间
       if (plan.next_run_at && new Date(plan.next_run_at) > now) {
+        console.log(`[PendingPlans] 计划 ${plan.id} 下次执行时间未到 (${plan.next_run_at})，跳过`);
         return false;
       }
       
@@ -107,35 +148,50 @@ export async function GET(request: NextRequest) {
         const lastRun = new Date(plan.last_run_at);
         const minutesSinceLastRun = (now.getTime() - lastRun.getTime()) / (1000 * 60);
         if (minutesSinceLastRun < 1) {
+          console.log(`[PendingPlans] 计划 ${plan.id} 1分钟内已执行过，跳过`);
           return false; // 1分钟内已执行过
         }
       }
       
       const { frequency, scheduled_time, scheduled_days, scheduled_dates } = plan;
+      let shouldExecute = false;
       
       switch (frequency) {
         case 'hourly':
           // 每小时执行，检查分钟是否为0
-          return now.getMinutes() < 5; // 每小时的前5分钟内可执行
+          shouldExecute = now.getMinutes() < 5; // 每小时的前5分钟内可执行
+          break;
           
         case 'daily':
-          // 每天执行，检查时间匹配
-          return scheduled_time === currentTime;
+          // 每天执行，使用时间窗口匹配（避免精确匹配导致错过）
+          shouldExecute = isTimeMatch(scheduled_time, currentTime);
+          break;
           
         case 'weekly':
-          // 每周执行，检查星期几和时间
+          // 每周执行，检查星期几和时间窗口
           const days = scheduled_days || [];
-          return days.includes(currentDay) && scheduled_time === currentTime;
+          shouldExecute = days.includes(currentDay) && isTimeMatch(scheduled_time, currentTime);
+          console.log(`[PendingPlans] 计划 ${plan.id} weekly 检查: days=${JSON.stringify(days)}, currentDay=${currentDay}, timeMatch=${isTimeMatch(scheduled_time, currentTime)}`);
+          break;
           
         case 'monthly':
-          // 每月执行，检查日期和时间
+          // 每月执行，检查日期和时间窗口
           const dates = scheduled_dates || [];
-          return dates.includes(currentDate) && scheduled_time === currentTime;
+          shouldExecute = dates.includes(currentDate) && isTimeMatch(scheduled_time, currentTime);
+          break;
           
         default:
-          return false;
+          shouldExecute = false;
       }
+      
+      if (shouldExecute) {
+        console.log(`[PendingPlans] 计划 ${plan.id} (${plan.plan_name}) 满足执行条件`);
+      }
+      
+      return shouldExecute;
     });
+    
+    console.log(`[PendingPlans] 最终待执行计划数: ${pendingPlans.length}`);
     
     return NextResponse.json({ 
       success: true, 
@@ -149,9 +205,9 @@ export async function GET(request: NextRequest) {
       }
     });
   } catch (error) {
-    console.error('获取待执行计划异常:', error);
+    console.error('[PendingPlans] 获取待执行计划异常:', error);
     return NextResponse.json(
-      { success: false, error: '服务器错误' },
+      { success: false, error: `服务器错误: ${error instanceof Error ? error.message : '未知错误'}` },
       { status: 500 }
     );
   }
