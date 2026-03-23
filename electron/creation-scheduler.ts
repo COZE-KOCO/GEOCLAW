@@ -373,11 +373,6 @@ export class CreationScheduler {
     console.error('[CreationScheduler] 获取计划失败:', result.error);
     return [];
   }
-      });
-
-      req.end();
-    });
-  }
 
   /**
    * 执行创作计划
@@ -627,8 +622,6 @@ export class CreationScheduler {
     if (!result.success) {
       console.error('[CreationScheduler] 创建发布任务失败:', result.error);
     }
-  }
-    });
   }
 
   /**
