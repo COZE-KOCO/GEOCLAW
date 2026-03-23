@@ -347,7 +347,7 @@ export class AutoPublisher {
     const window = new BrowserWindow({
       width: 1200,
       height: 900,
-      show: false, // 隐藏窗口执行
+      show: true, // 显示窗口，可视化发布过程，方便调试
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,

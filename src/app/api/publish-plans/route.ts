@@ -101,6 +101,57 @@ export async function POST(request: NextRequest) {
             }))
           : data.targetPlatforms || [];
         
+        // 支持多文章模式：如果传入了 drafts 数组，为每篇文章创建一个计划
+        if (data.drafts && Array.isArray(data.drafts) && data.drafts.length > 0) {
+          const createdPlans = [];
+          for (let i = 0; i < data.drafts.length; i++) {
+            const draft = data.drafts[i];
+            const planName = data.drafts.length === 1 
+              ? data.planName 
+              : `${data.planName} (${i + 1})`;
+            
+            const input: CreatePublishPlanInput = {
+              businessId: data.businessId,
+              draftId: draft.id,
+              planName,
+              planType: data.planType,
+              frequency: data.frequency,
+              scheduledTime: data.scheduledTime,
+              scheduledDays: data.scheduledDays,
+              scheduledDates: data.scheduledDates,
+              customCron: data.customCron,
+              maxRuns: data.maxRuns,
+              startDate: data.startDate ? new Date(data.startDate) : undefined,
+              endDate: data.endDate ? new Date(data.endDate) : undefined,
+              title: draft.title,
+              content: draft.content,
+              images: draft.images || data.images || [],
+              tags: draft.tags || data.tags || [],
+              targetPlatforms,
+              priority: data.priority,
+              maxRetries: data.maxRetries,
+              retryDelay: data.retryDelay,
+              notifyOnComplete: data.notifyOnComplete,
+              notifyOnFail: data.notifyOnFail,
+              metadata: { 
+                ...data.metadata,
+                draftIds: data.draftIds,
+                draftIndex: i,
+                totalDrafts: data.drafts.length,
+              },
+            };
+            
+            const plan = await createPublishPlan(input);
+            createdPlans.push(plan);
+          }
+          return NextResponse.json({ 
+            success: true, 
+            data: createdPlans.length === 1 ? createdPlans[0] : createdPlans,
+            message: `成功创建 ${createdPlans.length} 个发布计划`,
+          });
+        }
+        
+        // 单文章模式（原有逻辑）
         const input: CreatePublishPlanInput = {
           businessId: data.businessId,
           draftId: data.draftId,

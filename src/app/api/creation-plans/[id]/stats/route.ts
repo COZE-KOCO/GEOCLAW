@@ -30,6 +30,11 @@ export async function PATCH(
     const { id: planId } = await params;
     const body = await request.json();
     
+    console.log('[PlanStats] 更新计划统计:', {
+      planId,
+      updates: body,
+    });
+    
     const supabase = getSupabaseClient();
     
     // 先获取当前计划信息
@@ -40,6 +45,10 @@ export async function PATCH(
       .single();
     
     if (fetchError || !currentPlan) {
+      console.error('[PlanStats] 计划不存在:', {
+        planId,
+        error: fetchError?.message,
+      });
       return NextResponse.json(
         { success: false, error: '计划不存在' },
         { status: 404 }
@@ -78,6 +87,8 @@ export async function PATCH(
       updates.last_keyword_index = body.lastKeywordIndex;
     }
     
+    console.log('[PlanStats] 执行更新:', updates);
+    
     // 执行更新
     let updateResult = await supabase
       .from('creation_plans')
@@ -89,6 +100,7 @@ export async function PATCH(
     // 如果更新失败且包含 last_keyword_index，尝试不带该字段重试
     // 这是为了兼容数据库中没有该字段的情况
     if (error && 'last_keyword_index' in updates) {
+      console.warn('[PlanStats] 首次更新失败，尝试不带 last_keyword_index 重试...');
       const { last_keyword_index, ...updatesWithoutKeywordIndex } = updates;
       const retryResult = await supabase
         .from('creation_plans')
@@ -98,23 +110,31 @@ export async function PATCH(
       if (!retryResult.error) {
         // 重试成功，说明是字段不存在的问题，忽略这个错误
         error = null;
-        console.warn('last_keyword_index 字段不存在，已跳过该字段的更新');
+        console.log('[PlanStats] 重试成功');
+      } else {
+        console.error('[PlanStats] 重试也失败:', retryResult.error);
       }
     }
     
     if (error) {
-      console.error('更新计划统计失败:', error);
+      console.error('[PlanStats] 更新失败:', {
+        message: error.message,
+        code: error.code,
+        details: error.details,
+      });
       return NextResponse.json(
-        { success: false, error: '更新失败' },
+        { success: false, error: `更新失败: ${error.message}` },
         { status: 500 }
       );
     }
     
+    console.log('[PlanStats] 更新成功');
+    
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('更新计划统计异常:', error);
+    console.error('[PlanStats] 更新异常:', error);
     return NextResponse.json(
-      { success: false, error: '服务器错误' },
+      { success: false, error: `服务器错误: ${error instanceof Error ? error.message : '未知错误'}` },
       { status: 500 }
     );
   }

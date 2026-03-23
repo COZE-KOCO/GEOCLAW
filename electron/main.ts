@@ -5,6 +5,7 @@ import { autoUpdater } from 'electron-updater';
 import { PlatformAuthManager } from './platform-auth';
 import { createPublishScheduler, getPublishScheduler } from './publish-scheduler';
 import { createCreationScheduler, getCreationScheduler } from './creation-scheduler';
+import { createPublishPlanScheduler, getPublishPlanScheduler } from './publish-plan-scheduler';
 
 let mainWindow: BrowserWindow | null = null;
 let authManager: PlatformAuthManager;
@@ -318,6 +319,10 @@ function initCreationScheduler() {
   const serverUrl = isDev ? DEV_SERVER_URL : PROD_SERVER_URL;
   const scheduler = createCreationScheduler(mainWindow, serverUrl, 60000); // 每60秒检查一次
 
+  // 启动调度器
+  scheduler.start();
+  console.log('[Electron] 创作任务调度器已启动');
+
   // IPC: 获取创作调度器状态
   ipcMain.handle('creation-scheduler-status', () => {
     return scheduler.getStatus();
@@ -340,6 +345,27 @@ function initCreationScheduler() {
   });
 }
 
+// 初始化发布计划调度器
+function initPublishPlanScheduler() {
+  const serverUrl = isDev ? DEV_SERVER_URL : PROD_SERVER_URL;
+  const scheduler = createPublishPlanScheduler(mainWindow, serverUrl, 60000); // 每60秒检查一次
+
+  // 启动调度器
+  scheduler.start();
+  console.log('[Electron] 发布计划调度器已启动');
+
+  // IPC: 获取发布计划调度器状态
+  ipcMain.handle('publish-plan-scheduler-status', () => {
+    return scheduler.getStatus();
+  });
+
+  // IPC: 手动触发检查
+  ipcMain.handle('publish-plan-scheduler-trigger', async () => {
+    await scheduler.triggerCheck();
+    return { success: true };
+  });
+}
+
 app.whenReady().then(() => {
   // 创建示例配置文件（首次运行）
   PlatformAuthManager.createExampleConfig();
@@ -349,6 +375,7 @@ app.whenReady().then(() => {
   initAutoUpdater();
   initPublishScheduler(); // 启动发布任务调度器
   initCreationScheduler(); // 启动创作任务调度器
+  initPublishPlanScheduler(); // 启动发布计划调度器
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -171,42 +171,110 @@ export default function AutoPublishPage() {
     toggleModule,
   } = useGenerationConfig();
   
-  // 调度器状态（桌面端）
+  // 调度器状态（桌面端）- 与 Electron 主进程同步
   const [schedulerRunning, setSchedulerRunning] = useState(false);
   
-  // 迁移 localStorage 数据到数据库
-  const migrateLocalPlans = async () => {
-    if (!selectedBusiness) return;
+  // 同步 Electron 调度器状态
+  useEffect(() => {
+    if (!inElectron) return;
+    
+    const electronAPI = (window as any).electronAPI;
+    if (!electronAPI) return;
+    
+    // 获取初始状态
+    electronAPI.getCreationSchedulerStatus().then((status: { isRunning: boolean }) => {
+      console.log('[AutoPublish] 调度器初始状态:', status);
+      setSchedulerRunning(status.isRunning);
+    }).catch((error: Error) => {
+      console.error('[AutoPublish] 获取调度器状态失败:', error);
+    });
+    
+    // 监听状态变化
+    const unsubscribe = electronAPI.onCreationSchedulerStatus((status: { status: string }) => {
+      console.log('[AutoPublish] 调度器状态变化:', status);
+      setSchedulerRunning(status.status === 'running');
+    });
+    
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [inElectron]);
+  
+  // 切换调度器状态
+  const handleToggleScheduler = async () => {
+    const electronAPI = (window as any).electronAPI;
+    if (!electronAPI) {
+      console.error('[AutoPublish] Electron API 不可用');
+      return;
+    }
     
     try {
-      // 获取 localStorage 中的计划
-      const localPlans = getCreationPlansLocal(selectedBusiness);
-      
-      if (localPlans.length === 0) return;
-      
-      // 检查数据库中是否已有数据
-      const checkResponse = await fetch(`/api/migration/creation-plans?businessId=${selectedBusiness}`);
-      const checkData = await checkResponse.json();
-      
-      if (!checkData.success || checkData.databaseCount > 0) {
-        // 数据库中已有数据，不自动迁移
-        return;
+      const result = await electronAPI.toggleCreationScheduler(!schedulerRunning);
+      console.log('[AutoPublish] 切换调度器结果:', result);
+      if (result.success) {
+        setSchedulerRunning(!schedulerRunning);
       }
-      
+    } catch (error) {
+      console.error('[AutoPublish] 切换调度器失败:', error);
+    }
+  };
+  
+  // 迁移 localStorage 数据到数据库（强制模式）
+  const [migrationStatus, setMigrationStatus] = useState<'idle' | 'migrating' | 'done'>('idle');
+  
+  const migrateLocalPlans = async (force: boolean = false) => {
+    if (!selectedBusiness) return;
+    
+    const localPlans = getCreationPlansLocal(selectedBusiness);
+    console.log('[AutoPublish] localStorage 中的计划:', localPlans.length);
+    
+    if (localPlans.length === 0) {
+      console.log('[AutoPublish] 没有需要迁移的计划');
+      return { success: true, migrated: 0 };
+    }
+    
+    try {
       // 执行迁移
       const migrateResponse = await fetch('/api/migration/creation-plans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plans: localPlans }),
+        body: JSON.stringify({ plans: localPlans, force }),
       });
       
       const migrateResult = await migrateResponse.json();
+      console.log('[AutoPublish] 迁移结果:', migrateResult);
       
       if (migrateResult.success && migrateResult.summary.success > 0) {
-        console.log(`[Migration] 成功迁移 ${migrateResult.summary.success} 个计划到数据库`);
+        console.log(`[AutoPublish] 成功迁移 ${migrateResult.summary.success} 个计划到数据库`);
+        return { success: true, migrated: migrateResult.summary.success };
       }
+      
+      return { success: false, migrated: 0, error: migrateResult.message };
     } catch (error) {
-      console.error('[Migration] 迁移失败:', error);
+      console.error('[AutoPublish] 迁移失败:', error);
+      return { success: false, migrated: 0, error: String(error) };
+    }
+  };
+  
+  // 手动触发迁移
+  const handleForceMigration = async () => {
+    if (!selectedBusiness) return;
+    
+    setMigrationStatus('migrating');
+    toast.info('正在迁移数据...');
+    
+    const result = await migrateLocalPlans(true);
+    
+    if (result?.success && result.migrated > 0) {
+      toast.success(`成功迁移 ${result.migrated} 个计划`);
+      setMigrationStatus('done');
+      loadData();
+    } else if (result?.migrated === 0) {
+      toast.info('没有需要迁移的计划');
+      setMigrationStatus('idle');
+    } else {
+      toast.error(`迁移失败: ${result?.error || '未知错误'}`);
+      setMigrationStatus('idle');
     }
   };
   
@@ -215,9 +283,8 @@ export default function AutoPublishPage() {
     setInElectron(isElectron());
     
     if (selectedBusiness) {
-      // 先尝试迁移 localStorage 数据
-      migrateLocalPlans().then(() => {
-        // 迁移完成后再加载数据
+      // 自动尝试迁移 localStorage 数据（仅首次）
+      migrateLocalPlans(false).then(() => {
         loadData();
       });
     }
@@ -226,31 +293,42 @@ export default function AutoPublishPage() {
   const loadData = async () => {
     if (!selectedBusiness) return;
     
-    // 加载计划 - 从 API 获取
+    console.log('[AutoPublish] 加载数据, businessId:', selectedBusiness);
+    
+    // 加载计划 - 统一从 API 获取（数据库）
     try {
       const plansResponse = await fetch(`/api/creation-plans?businessId=${selectedBusiness}`);
       const plansData = await plansResponse.json();
+      console.log('[AutoPublish] 计划数据:', plansData);
       if (plansResponse.ok && plansData.success) {
         setPlans(plansData.data || []);
       } else {
-        // 如果 API 失败，回退到 localStorage
-        const loadedPlans = getCreationPlansLocal(selectedBusiness);
-        setPlans(loadedPlans);
+        console.error('[AutoPublish] 加载计划失败:', plansData.error);
+        setPlans([]);
       }
     } catch (error) {
-      console.error('加载计划失败:', error);
-      // 回退到 localStorage
-      const loadedPlans = getCreationPlansLocal(selectedBusiness);
-      setPlans(loadedPlans);
+      console.error('[AutoPublish] 加载计划异常:', error);
+      setPlans([]);
     }
     
-    // 加载任务
-    const loadedTasks = getCreationTasksLocal(selectedBusiness);
-    setTasks(loadedTasks);
-    
-    // 加载统计
-    const stats = getTaskStats(selectedBusiness);
-    setTaskStats(stats);
+    // 加载任务 - 统一从 API 获取（数据库）
+    try {
+      const tasksResponse = await fetch(`/api/creation-tasks?businessId=${selectedBusiness}`);
+      const tasksData = await tasksResponse.json();
+      console.log('[AutoPublish] 任务数据:', tasksData);
+      if (tasksResponse.ok && tasksData.success) {
+        setTasks(tasksData.data || []);
+        setTaskStats(tasksData.stats || { pending: 0, processing: 0, completed: 0, failed: 0 });
+      } else {
+        console.error('[AutoPublish] 加载任务失败:', tasksData.error);
+        setTasks([]);
+        setTaskStats({ pending: 0, processing: 0, completed: 0, failed: 0 });
+      }
+    } catch (error) {
+      console.error('[AutoPublish] 加载任务异常:', error);
+      setTasks([]);
+      setTaskStats({ pending: 0, processing: 0, completed: 0, failed: 0 });
+    }
     
     // 加载关键词库
     try {
@@ -314,6 +392,12 @@ export default function AutoPublishPage() {
     }
     
     try {
+      console.log('[AutoPublish] 创建计划请求:', {
+        businessId: selectedBusiness,
+        planName: basicForm.planName,
+        frequency: basicForm.frequency,
+      });
+      
       const response = await fetch('/api/creation-plans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -336,6 +420,7 @@ export default function AutoPublishPage() {
       });
       
       const result = await response.json();
+      console.log('[AutoPublish] 创建计划响应:', result);
       
       if (response.ok && result.success) {
         toast.success('计划创建成功');
@@ -343,11 +428,12 @@ export default function AutoPublishPage() {
         resetForm();
         loadData();
       } else {
+        console.error('[AutoPublish] 创建失败:', result);
         toast.error(result.error || '创建失败，请重试');
       }
     } catch (error) {
-      console.error('创建计划失败:', error);
-      toast.error('创建失败，请重试');
+      console.error('[AutoPublish] 创建计划异常:', error);
+      toast.error(`创建失败: ${error instanceof Error ? error.message : '网络错误'}`);
     }
   };
   
@@ -464,16 +550,35 @@ export default function AutoPublishPage() {
             <h1 className="text-2xl font-bold text-gray-900">全自动创作发布</h1>
             <p className="text-gray-500 mt-1">配置自动化创作计划，实现内容从生成到发布的全流程自动化</p>
           </div>
-          <Button 
-            className="bg-purple-500 hover:bg-purple-600"
-            onClick={() => {
-              resetForm();
-              setShowCreateDialog(true);
-            }}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            新建计划
-          </Button>
+          <div className="flex items-center gap-3">
+            <Button 
+              variant="outline"
+              onClick={handleForceMigration}
+              disabled={migrationStatus === 'migrating'}
+            >
+              {migrationStatus === 'migrating' ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  同步中...
+                </>
+              ) : (
+                <>
+                  <Layers className="h-4 w-4 mr-2" />
+                  同步数据
+                </>
+              )}
+            </Button>
+            <Button 
+              className="bg-purple-500 hover:bg-purple-600"
+              onClick={() => {
+                resetForm();
+                setShowCreateDialog(true);
+              }}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              新建计划
+            </Button>
+          </div>
         </div>
         
         {/* 统计卡片 */}
@@ -559,7 +664,7 @@ export default function AutoPublishPage() {
                 </div>
                 <Button
                   variant={schedulerRunning ? 'destructive' : 'default'}
-                  onClick={() => setSchedulerRunning(!schedulerRunning)}
+                  onClick={handleToggleScheduler}
                 >
                   {schedulerRunning ? (
                     <>

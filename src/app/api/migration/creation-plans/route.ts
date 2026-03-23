@@ -42,14 +42,22 @@ interface LocalPlan {
  * POST /api/migration/creation-plans
  * 迁移 localStorage 中的计划到数据库
  * 
- * Body: { plans: LocalPlan[] }
+ * Body: { plans: LocalPlan[], force?: boolean }
+ * force: 强制更新已存在的计划
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { plans } = body as { plans: LocalPlan[] };
+    const { plans, force } = body as { plans: LocalPlan[]; force?: boolean };
+    
+    console.log('[Migration] 收到迁移请求:', {
+      planCount: plans?.length,
+      planIds: plans?.map(p => p.id),
+      force,
+    });
     
     if (!plans || !Array.isArray(plans) || plans.length === 0) {
+      console.log('[Migration] 没有需要迁移的计划');
       return NextResponse.json(
         { success: false, error: '没有需要迁移的计划' },
         { status: 400 }
@@ -57,79 +65,111 @@ export async function POST(request: NextRequest) {
     }
     
     const supabase = getSupabaseClient();
-    const results: { id: string; status: 'success' | 'skipped' | 'error'; error?: string }[] = [];
+    const results: { id: string; status: 'success' | 'skipped' | 'updated' | 'error'; error?: string }[] = [];
     
     for (const plan of plans) {
       try {
+        console.log(`[Migration] 处理计划 ${plan.id}: ${plan.planName}`);
+        
         // 检查是否已存在
-        const { data: existing } = await supabase
+        const { data: existing, error: checkError } = await supabase
           .from('creation_plans')
           .select('id')
           .eq('id', plan.id)
           .single();
         
-        if (existing) {
+        if (existing && !force) {
+          console.log(`[Migration] 计划 ${plan.id} 已存在，跳过`);
           results.push({ id: plan.id, status: 'skipped' });
           continue;
         }
         
-        // 插入到数据库
-        const { error } = await supabase
-          .from('creation_plans')
-          .insert({
-            id: plan.id,
-            business_id: plan.businessId,
-            plan_name: plan.planName,
-            status: plan.status,
-            frequency: plan.frequency,
-            articles_per_run: plan.articlesPerRun,
-            scheduled_time: plan.scheduledTime,
-            scheduled_days: plan.scheduledDays,
-            scheduled_dates: plan.scheduledDates,
-            content_config: plan.contentConfig,
-            publish_config: plan.publishConfig,
-            total_created: plan.stats.totalCreated,
-            total_published: plan.stats.totalPublished,
-            success_rate: plan.stats.successRate.toString(),
-            last_run_at: plan.stats.lastRunAt,
-            next_run_at: plan.stats.nextRunAt,
-            start_date: plan.startDate,
-            end_date: plan.endDate,
-            created_at: plan.createdAt,
-            updated_at: plan.updatedAt,
-          });
+        if (checkError && checkError.code !== 'PGRST116') {
+          // PGRST116 是"没有找到记录"的错误，这是正常的
+          console.error(`[Migration] 检查计划 ${plan.id} 是否存在时出错:`, checkError);
+        }
+        
+        const planData = {
+          id: plan.id,
+          business_id: plan.businessId,
+          plan_name: plan.planName,
+          status: plan.status,
+          frequency: plan.frequency,
+          articles_per_run: plan.articlesPerRun,
+          scheduled_time: plan.scheduledTime,
+          scheduled_days: plan.scheduledDays,
+          scheduled_dates: plan.scheduledDates,
+          content_config: plan.contentConfig,
+          publish_config: plan.publishConfig,
+          total_created: plan.stats.totalCreated,
+          total_published: plan.stats.totalPublished,
+          success_rate: plan.stats.successRate.toString(),
+          last_run_at: plan.stats.lastRunAt,
+          next_run_at: plan.stats.nextRunAt,
+          start_date: plan.startDate,
+          end_date: plan.endDate,
+          created_at: plan.createdAt,
+          updated_at: new Date().toISOString(),
+          last_keyword_index: 0,
+        };
+        
+        let error;
+        
+        if (existing && force) {
+          // 强制模式：更新已存在的计划
+          console.log(`[Migration] 强制更新计划 ${plan.id}`);
+          const result = await supabase
+            .from('creation_plans')
+            .update(planData)
+            .eq('id', plan.id);
+          error = result.error;
+        } else {
+          // 插入新计划
+          const result = await supabase
+            .from('creation_plans')
+            .insert(planData);
+          error = result.error;
+        }
         
         if (error) {
-          console.error(`迁移计划 ${plan.id} 失败:`, error);
+          console.error(`[Migration] 迁移计划 ${plan.id} 失败:`, {
+            message: error.message,
+            code: error.code,
+            details: error.details,
+          });
           results.push({ id: plan.id, status: 'error', error: error.message });
         } else {
-          results.push({ id: plan.id, status: 'success' });
+          console.log(`[Migration] 计划 ${plan.id} 迁移成功`);
+          results.push({ id: plan.id, status: existing ? 'updated' : 'success' });
         }
       } catch (e) {
-        console.error(`迁移计划 ${plan.id} 异常:`, e);
+        console.error(`[Migration] 迁移计划 ${plan.id} 异常:`, e);
         results.push({ id: plan.id, status: 'error', error: String(e) });
       }
     }
     
     const successCount = results.filter(r => r.status === 'success').length;
+    const updatedCount = results.filter(r => r.status === 'updated').length;
     const skippedCount = results.filter(r => r.status === 'skipped').length;
     const errorCount = results.filter(r => r.status === 'error').length;
     
+    console.log(`[Migration] 迁移完成: 成功=${successCount}, 更新=${updatedCount}, 跳过=${skippedCount}, 失败=${errorCount}`);
+    
     return NextResponse.json({
       success: true,
-      message: `迁移完成：成功 ${successCount}，跳过 ${skippedCount}，失败 ${errorCount}`,
+      message: `迁移完成：成功 ${successCount}，更新 ${updatedCount}，跳过 ${skippedCount}，失败 ${errorCount}`,
       results,
       summary: {
         total: plans.length,
-        success: successCount,
+        success: successCount + updatedCount,
         skipped: skippedCount,
         error: errorCount,
       },
     });
   } catch (error) {
-    console.error('数据迁移异常:', error);
+    console.error('[Migration] 数据迁移异常:', error);
     return NextResponse.json(
-      { success: false, error: '服务器错误' },
+      { success: false, error: `服务器错误: ${error instanceof Error ? error.message : '未知错误'}` },
       { status: 500 }
     );
   }

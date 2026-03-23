@@ -155,9 +155,15 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    console.log('[CreationPlans] 创建计划请求:', {
+      businessId: body.businessId,
+      planName: body.planName,
+      frequency: body.frequency,
+    });
     
     // 验证必填字段
     if (!body.businessId) {
+      console.error('[CreationPlans] 缺少商家ID');
       return NextResponse.json(
         { success: false, error: '缺少商家ID' },
         { status: 400 }
@@ -165,6 +171,7 @@ export async function POST(request: NextRequest) {
     }
     
     if (!body.planName) {
+      console.error('[CreationPlans] 缺少计划名称');
       return NextResponse.json(
         { success: false, error: '缺少计划名称' },
         { status: 400 }
@@ -179,6 +186,7 @@ export async function POST(request: NextRequest) {
     
     const validation = validateGenerationConfig(contentConfig);
     if (!validation.valid) {
+      console.error('[CreationPlans] 配置验证失败:', validation.errors);
       return NextResponse.json(
         { success: false, error: validation.errors.join('; ') },
         { status: 400 }
@@ -207,11 +215,16 @@ export async function POST(request: NextRequest) {
     };
     
     const supabase = getSupabaseClient();
+    const dbRecord = planToDb(input);
+    console.log('[CreationPlans] 准备插入数据库:', {
+      business_id: dbRecord.business_id,
+      plan_name: dbRecord.plan_name,
+    });
     
     // 插入数据库
     let insertResult = await supabase
       .from('creation_plans')
-      .insert(planToDb(input))
+      .insert(dbRecord)
       .select()
       .single();
     
@@ -221,8 +234,16 @@ export async function POST(request: NextRequest) {
     // 如果插入失败，尝试不带 last_keyword_index 字段重试
     // 这是为了兼容数据库中没有该字段的情况
     if (error) {
-      const dbRecord = planToDb(input);
+      console.error('[CreationPlans] 首次插入失败:', {
+        message: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint,
+      });
+      
       const { last_keyword_index, ...dbRecordWithoutKeywordIndex } = dbRecord;
+      console.log('[CreationPlans] 尝试不带 last_keyword_index 重试...');
+      
       const retryResult = await supabase
         .from('creation_plans')
         .insert(dbRecordWithoutKeywordIndex)
@@ -232,26 +253,35 @@ export async function POST(request: NextRequest) {
       if (!retryResult.error) {
         data = retryResult.data;
         error = null;
-        console.warn('last_keyword_index 字段不存在，已跳过该字段的插入');
+        console.log('[CreationPlans] 重试成功，已跳过 last_keyword_index 字段');
+      } else {
+        console.error('[CreationPlans] 重试也失败:', {
+          message: retryResult.error.message,
+          code: retryResult.error.code,
+          details: retryResult.error.details,
+          hint: retryResult.error.hint,
+        });
       }
     }
     
     if (error) {
-      console.error('创建创作计划失败:', error);
+      console.error('[CreationPlans] 创建计划最终失败:', error);
       return NextResponse.json(
-        { success: false, error: '创建创作计划失败' },
+        { success: false, error: `创建失败: ${error.message || '数据库错误'}` },
         { status: 500 }
       );
     }
+    
+    console.log('[CreationPlans] 计划创建成功:', data?.id);
     
     return NextResponse.json({ 
       success: true, 
       data: dbToPlan(data) 
     });
   } catch (error) {
-    console.error('创建创作计划异常:', error);
+    console.error('[CreationPlans] 创建计划异常:', error);
     return NextResponse.json(
-      { success: false, error: '服务器错误' },
+      { success: false, error: `服务器错误: ${error instanceof Error ? error.message : '未知错误'}` },
       { status: 500 }
     );
   }

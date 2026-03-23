@@ -395,9 +395,12 @@ export class PlatformAuthManager {
       try {
         const configContent = fs.readFileSync(configPath, 'utf-8');
         const config = JSON.parse(configContent);
-        if (config.apiBaseUrl) {
+        // 忽略包含占位符的配置
+        if (config.apiBaseUrl && !config.apiBaseUrl.includes('your-domain')) {
           console.log('[Electron] 使用配置文件 apiBaseUrl:', config.apiBaseUrl);
           return { apiBaseUrl: config.apiBaseUrl };
+        } else {
+          console.log('[Electron] 配置文件包含占位符，忽略');
         }
       } catch (e) {
         console.warn('[Electron] 配置文件解析失败:', e);
@@ -422,12 +425,15 @@ export class PlatformAuthManager {
   static createExampleConfig(): void {
     const configPath = path.join(app.getPath('userData'), 'config.json');
     if (!fs.existsSync(configPath)) {
+      // 使用正确的生产环境 API 地址
+      const prodUrl = process.env.ELECTRON_SERVER_URL || 'https://geoclaw.coze.site';
       const exampleConfig = {
-        apiBaseUrl: 'https://your-domain.com',
-        _comment: '将apiBaseUrl修改为您的服务器地址',
+        apiBaseUrl: prodUrl,
+        _comment: '这是自动生成的配置文件，如需修改请编辑 apiBaseUrl',
       };
       fs.writeFileSync(configPath, JSON.stringify(exampleConfig, null, 2));
-      console.log('[Electron] 已创建示例配置文件:', configPath);
+      console.log('[Electron] 已创建配置文件:', configPath);
+      console.log('[Electron] API地址:', prodUrl);
     }
   }
 

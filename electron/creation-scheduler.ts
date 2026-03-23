@@ -218,6 +218,92 @@ export class CreationScheduler {
   }
 
   /**
+   * 带重试的 HTTP 请求
+   * 用于提高网络抖动或临时不可用情况下的稳定性
+   */
+  private async fetchWithRetry(
+    urlPath: string,
+    options: {
+      method?: 'GET' | 'POST' | 'PUT' | 'PATCH';
+      body?: any;
+      maxRetries?: number;
+      retryDelay?: number;
+      timeout?: number;
+    } = {}
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { maxRetries = 3, retryDelay = 2000, timeout = 30000, method = 'GET', body } = options;
+    let lastError: string = '';
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const result = await new Promise<{ success: boolean; data?: any; error?: string }>((resolve) => {
+          const url = new URL(urlPath, this.apiBaseUrl);
+          const isHttps = url.protocol === 'https:';
+          const lib = isHttps ? https : http;
+
+          const reqOptions = {
+            hostname: url.hostname,
+            port: url.port || (isHttps ? 443 : 80),
+            path: url.pathname + url.search,
+            method,
+            headers: {
+              'Content-Type': 'application/json',
+              ...(body ? { 'Content-Length': Buffer.byteLength(JSON.stringify(body)) } : {}),
+            },
+          };
+
+          const req = lib.request(reqOptions, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+              try {
+                const parsed = JSON.parse(data);
+                resolve({ success: res.statusCode! < 400, data: parsed });
+              } catch {
+                resolve({ success: false, error: '解析响应失败' });
+              }
+            });
+          });
+
+          req.on('error', (error) => {
+            resolve({ success: false, error: error.message });
+          });
+
+          req.setTimeout(timeout, () => {
+            req.destroy();
+            resolve({ success: false, error: '请求超时' });
+          });
+
+          if (body) {
+            req.write(JSON.stringify(body));
+          }
+          req.end();
+        });
+        
+        if (result.success) {
+          return result;
+        }
+        
+        lastError = result.error || '未知错误';
+        console.log(`[CreationScheduler] 请求失败 (尝试 ${attempt}/${maxRetries}): ${urlPath}`, lastError);
+        
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        console.log(`[CreationScheduler] 请求异常 (尝试 ${attempt}/${maxRetries}): ${urlPath}`, lastError);
+        
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
+        }
+      }
+    }
+    
+    return { success: false, error: lastError };
+  }
+
+  /**
    * 手动触发检查
    */
   async triggerCheck(): Promise<void> {
@@ -227,12 +313,11 @@ export class CreationScheduler {
 
   /**
    * 检查并执行待执行计划
+   * 注意：调度器独立于窗口运行，主窗口仅用于发送通知
    */
   private async checkAndExecute(): Promise<void> {
-    if (!this.mainWindow) {
-      console.log('[CreationScheduler] 主窗口不可用，跳过检查');
-      return;
-    }
+    // 移除主窗口检查，调度器应独立运行
+    // 主窗口用于发送通知，不是必需的
 
     try {
       // 发送检查开始通知
@@ -273,50 +358,20 @@ export class CreationScheduler {
   }
 
   /**
-   * 从API获取待执行的创作计划
+   * 从API获取待执行的创作计划（带重试）
    */
   private async fetchPendingPlans(): Promise<CreationPlan[]> {
-    return new Promise((resolve, reject) => {
-      const url = new URL('/api/creation-plans/pending', this.apiBaseUrl);
-      const isHttps = url.protocol === 'https:';
-      const lib = isHttps ? https : http;
-
-      const reqOptions = {
-        hostname: url.hostname,
-        port: url.port || (isHttps ? 443 : 80),
-        path: url.pathname + url.search,
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      };
-
-      const req = lib.request(reqOptions, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          try {
-            const json = JSON.parse(data);
-            resolve(json.plans || []);
-          } catch (e) {
-            console.error('[CreationScheduler] 解析计划数据失败:', e);
-            resolve([]);
-          }
-        });
-      });
-
-      req.on('error', (error) => {
-        console.error('[CreationScheduler] 获取计划失败:', error);
-        reject(error);
-      });
-
-      req.setTimeout(10000, () => {
-        req.destroy();
-        reject(new Error('请求超时'));
-      });
-
-      req.end();
+    const result = await this.fetchWithRetry('/api/creation-plans/pending', {
+      method: 'GET',
+      timeout: 10000,
     });
+    
+    if (result.success && result.data) {
+      return result.data.plans || [];
+    }
+    
+    console.error('[CreationScheduler] 获取计划失败:', result.error);
+    return [];
   }
 
   /**
@@ -405,6 +460,9 @@ export class CreationScheduler {
       // 5. 更新关键词进度索引（循环）
       const newKeywordIndex = (startIndex + plan.articlesPerRun) % keywords.length;
 
+      // 计算下次执行时间
+      const nextRunAt = this.calculateNextRunAt(plan);
+
       // 6. 更新计划统计
       this.currentProgress.status = 'completed';
       this.currentProgress.progress = 100;
@@ -418,13 +476,15 @@ export class CreationScheduler {
         totalCount: plan.articlesPerRun,
         completedAt: new Date().toISOString(),
         nextKeywordIndex: newKeywordIndex,
+        nextRunAt: nextRunAt.toISOString(),
       });
 
-      // 更新计划的运行时间和关键词进度
+      // 更新计划的运行时间、关键词进度和下次执行时间
       await this.updatePlanStats(plan.id, {
         totalCreated: plan.stats.totalCreated + this.currentProgress.createdCount,
         lastRunAt: new Date().toISOString(),
         lastKeywordIndex: newKeywordIndex,
+        nextRunAt: nextRunAt.toISOString(),
       });
 
     } catch (error) {
@@ -462,100 +522,52 @@ export class CreationScheduler {
   }
 
   /**
-   * 从关键词库获取关键词
+   * 从关键词库获取关键词（带重试）
    */
   private async fetchKeywordsFromLibrary(libraryId: string): Promise<string[]> {
-    return new Promise((resolve) => {
-      const url = new URL(`/api/keywords/${libraryId}`, this.apiBaseUrl);
-      const isHttps = url.protocol === 'https:';
-      const lib = isHttps ? https : http;
-
-      const req = lib.request(url.toString(), (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          try {
-            const json = JSON.parse(data);
-            resolve(json.keywords?.map((k: any) => k.word || k) || []);
-          } catch (e) {
-            resolve([]);
-          }
-        });
-      });
-
-      req.on('error', () => resolve([]));
-      req.setTimeout(5000, () => {
-        req.destroy();
-        resolve([]);
-      });
-      req.end();
+    const result = await this.fetchWithRetry(`/api/keywords/${libraryId}`, {
+      method: 'GET',
+      timeout: 5000,
     });
+    
+    if (result.success && result.data) {
+      return result.data.keywords?.map((k: any) => k.word || k) || [];
+    }
+    
+    return [];
   }
 
   /**
-   * 调用API生成内容
+   * 调用API生成内容（带重试）
    * 发送完整的 GenerationConfig 给 API
    */
   private async generateContent(
     plan: CreationPlan, 
     keyword: string
   ): Promise<{ success: boolean; draftId?: string; title?: string; content?: string; seoScore?: number; error?: string }> {
-    return new Promise((resolve) => {
-      const url = new URL('/api/content/generate', this.apiBaseUrl);
-      const isHttps = url.protocol === 'https:';
-      const lib = isHttps ? https : http;
-
-      // 发送完整的配置和关键词
-      const body = JSON.stringify({
+    const result = await this.fetchWithRetry('/api/content/generate', {
+      method: 'POST',
+      body: {
         businessId: plan.businessId,
         planId: plan.id,
         keyword, // 当前处理的关键词
         config: plan.contentConfig, // 完整的 GenerationConfig
         ruleId: plan.contentConfig.ruleId,
-      });
-
-      const reqOptions = {
-        hostname: url.hostname,
-        port: url.port || (isHttps ? 443 : 80),
-        path: url.pathname,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(body),
-        },
-      };
-
-      const req = lib.request(reqOptions, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          try {
-            const json = JSON.parse(data);
-            resolve({
-              success: json.success,
-              draftId: json.data?.draftId,
-              title: json.data?.title,
-              content: json.data?.content,
-              error: json.error,
-            });
-          } catch (e) {
-            resolve({ success: false, error: '解析响应失败' });
-          }
-        });
-      });
-
-      req.on('error', (error) => {
-        resolve({ success: false, error: error.message });
-      });
-
-      req.setTimeout(120000, () => {  // 2分钟超时
-        req.destroy();
-        resolve({ success: false, error: '生成超时' });
-      });
-
-      req.write(body);
-      req.end();
+      },
+      timeout: 120000, // 2分钟超时（内容生成需要较长时间）
     });
+    
+    if (result.success && result.data) {
+      return {
+        success: result.data.success,
+        draftId: result.data.data?.draftId,
+        title: result.data.data?.title,
+        content: result.data.data?.content,
+        error: result.data.error,
+      };
+    }
+    
+    return { success: false, error: result.error };
   }
 
   /**
@@ -582,21 +594,18 @@ export class CreationScheduler {
   }
 
   /**
-   * 创建发布任务
+   * 创建发布任务（带重试）
    */
   private async createPublishTask(
     plan: CreationPlan, 
     content: { draftId: string; title: string; content: string }
   ): Promise<void> {
-    return new Promise((resolve) => {
-      const url = new URL('/api/publish-tasks', this.apiBaseUrl);
-      const isHttps = url.protocol === 'https:';
-      const lib = isHttps ? https : http;
+    // 计算发布时间
+    const publishAt = new Date(Date.now() + plan.publishConfig.publishDelay * 60 * 1000);
 
-      // 计算发布时间
-      const publishAt = new Date(Date.now() + plan.publishConfig.publishDelay * 60 * 1000);
-
-      const body = JSON.stringify({
+    const result = await this.fetchWithRetry('/api/publish-tasks', {
+      method: 'POST',
+      body: {
         businessId: plan.businessId,
         planId: plan.id,
         draftId: content.draftId,
@@ -606,78 +615,70 @@ export class CreationScheduler {
         content: content.content,
         targetPlatforms: plan.publishConfig.targetPlatforms,
         scheduledAt: publishAt.toISOString(),
-      });
-
-      const reqOptions = {
-        hostname: url.hostname,
-        port: url.port || (isHttps ? 443 : 80),
-        path: url.pathname,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(body),
-        },
-      };
-
-      const req = lib.request(reqOptions, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          resolve();
-        });
-      });
-
-      req.on('error', () => resolve());
-      req.setTimeout(10000, () => {
-        req.destroy();
-        resolve();
-      });
-
-      req.write(body);
-      req.end();
+      },
+      timeout: 10000,
     });
+    
+    if (!result.success) {
+      console.error('[CreationScheduler] 创建发布任务失败:', result.error);
+    }
   }
 
   /**
-   * 更新计划统计
+   * 计算下次执行时间
+   */
+  private calculateNextRunAt(plan: CreationPlan): Date {
+    const now = new Date();
+    const [hour, minute] = plan.scheduledTime.split(':').map(Number);
+    
+    let nextRun = new Date(now);
+    nextRun.setHours(hour, minute, 0, 0);
+    
+    switch (plan.frequency) {
+      case 'hourly':
+        // 每小时执行，下次是 1 小时后
+        nextRun.setHours(nextRun.getHours() + 1);
+        break;
+        
+      case 'daily':
+        // 每天执行，下次是明天同一时间
+        nextRun.setDate(nextRun.getDate() + 1);
+        break;
+        
+      case 'weekly':
+        // 每周执行，下次是 7 天后
+        nextRun.setDate(nextRun.getDate() + 7);
+        break;
+        
+      case 'monthly':
+        // 每月执行，下次是下月同一天
+        nextRun.setMonth(nextRun.getMonth() + 1);
+        break;
+        
+      default:
+        // 默认明天
+        nextRun.setDate(nextRun.getDate() + 1);
+    }
+    
+    return nextRun;
+  }
+
+  /**
+   * 更新计划统计（带重试）
    */
   private async updatePlanStats(
     planId: string, 
-    stats: { totalCreated?: number; lastRunAt?: string; lastKeywordIndex?: number }
+    stats: { totalCreated?: number; lastRunAt?: string; lastKeywordIndex?: number; nextRunAt?: string }
   ): Promise<void> {
-    return new Promise((resolve) => {
-      const url = new URL(`/api/creation-plans/${planId}/stats`, this.apiBaseUrl);
-      const isHttps = url.protocol === 'https:';
-      const lib = isHttps ? https : http;
-
-      const body = JSON.stringify(stats);
-
-      const reqOptions = {
-        hostname: url.hostname,
-        port: url.port || (isHttps ? 443 : 80),
-        path: url.pathname,
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(body),
-        },
-      };
-
-      const req = lib.request(reqOptions, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => resolve());
-      });
-
-      req.on('error', () => resolve());
-      req.setTimeout(5000, () => {
-        req.destroy();
-        resolve();
-      });
-
-      req.write(body);
-      req.end();
+    const result = await this.fetchWithRetry(`/api/creation-plans/${planId}/stats`, {
+      method: 'PATCH',
+      body: stats,
+      timeout: 5000,
     });
+    
+    if (!result.success) {
+      console.error('[CreationScheduler] 更新计划统计失败:', result.error);
+    }
   }
 
   /**

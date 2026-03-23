@@ -287,7 +287,25 @@ export function PublishTaskManager({ businessId }: PublishTaskManagerProps) {
     setExecutingPlanId(planId);
     
     try {
-      const result = await window.electronAPI.executeTaskImmediately(planId);
+      // 第一步：通过 API 创建即时发布任务
+      const createResponse = await fetch('/api/publish-plans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'executeNow', data: { id: planId } }),
+      });
+      
+      const createResult = await createResponse.json();
+      
+      if (!createResult.success || !createResult.data?.id) {
+        console.error('创建即时任务失败:', createResult.error);
+        return;
+      }
+      
+      const taskId = createResult.data.id;
+      console.log('创建即时发布任务成功:', taskId);
+      
+      // 第二步：调用调度器立即执行该任务
+      const result = await window.electronAPI.executeTaskImmediately(taskId);
       
       if (result.success) {
         // 刷新列表

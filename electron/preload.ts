@@ -382,6 +382,56 @@ const electronAPI = {
   executeTaskImmediately: (taskId: string): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('execute-task-immediately', taskId);
   },
+
+  // ====== 发布计划调度器相关 ======
+
+  // 获取发布计划调度器状态
+  getPublishPlanSchedulerStatus: (): Promise<{
+    isRunning: boolean;
+    progress: {
+      status: string;
+      message?: string;
+      processedCount: number;
+      createdTasks: string[];
+      errors: string[];
+      lastCheckAt?: string;
+    } | null;
+  }> => {
+    return ipcRenderer.invoke('publish-plan-scheduler-status');
+  },
+
+  // 手动触发发布计划检查
+  triggerPublishPlanSchedulerCheck: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('publish-plan-scheduler-trigger');
+  },
+
+  // 监听发布计划调度器状态
+  onPublishPlanSchedulerStatus: (callback: (status: { status: string; checkInterval?: number }) => void) => {
+    ipcRenderer.on('publish-plan-scheduler-status', (_, status) => callback(status));
+    return () => {
+      ipcRenderer.removeListener('publish-plan-scheduler-status', callback as any);
+    };
+  },
+
+  // 监听待执行的发布计划
+  onPendingPublishPlans: (callback: (data: { count: number; plans: any[] }) => void) => {
+    ipcRenderer.on('pending-publish-plans', (_, data) => callback(data));
+    return () => {
+      ipcRenderer.removeListener('pending-publish-plans', callback as any);
+    };
+  },
+
+  // 监听发布计划调度器完成
+  onPublishPlanSchedulerCompleted: (callback: (data: {
+    processedCount: number;
+    createdTasks: number;
+    errors: number;
+  }) => void) => {
+    ipcRenderer.on('publish-plan-scheduler-completed', (_, data) => callback(data));
+    return () => {
+      ipcRenderer.removeListener('publish-plan-scheduler-completed', callback as any);
+    };
+  },
 };
 
 // 暴露API到window
