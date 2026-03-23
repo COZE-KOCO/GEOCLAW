@@ -23,10 +23,14 @@
       "output": "release"
     },
     "files": [
+<<<<<<< HEAD
       {
         "from": ".",
         "filter": ["package.json"]
       },
+=======
+      "package.json",
+>>>>>>> 3080d503ab2d936febc6cdf847162de98f99519a
       "dist/electron/**/*",
       "public/**/*"
     ],
@@ -40,10 +44,6 @@
         "from": "public",
         "to": "server/public",
         "filter": ["**/*"]
-      },
-      {
-        "from": "package.json",
-        "to": "server/package.json"
       },
       {
         "from": "node_modules/next",

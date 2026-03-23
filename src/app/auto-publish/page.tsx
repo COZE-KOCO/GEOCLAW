@@ -207,6 +207,24 @@ export default function AutoPublishPage() {
       console.error('[AutoPublish] Electron API 不可用');
       return;
     }
+<<<<<<< HEAD
+=======
+    
+    try {
+      const result = await electronAPI.toggleCreationScheduler(!schedulerRunning);
+      console.log('[AutoPublish] 切换调度器结果:', result);
+      if (result.success) {
+        setSchedulerRunning(!schedulerRunning);
+      }
+    } catch (error) {
+      console.error('[AutoPublish] 切换调度器失败:', error);
+    }
+  };
+  
+  // 迁移 localStorage 数据到数据库
+  const migrateLocalPlans = async () => {
+    if (!selectedBusiness) return;
+>>>>>>> 3080d503ab2d936febc6cdf847162de98f99519a
     
     try {
       const result = await electronAPI.toggleCreationScheduler(!schedulerRunning);
