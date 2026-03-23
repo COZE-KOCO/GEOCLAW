@@ -171,8 +171,53 @@ export default function AutoPublishPage() {
     toggleModule,
   } = useGenerationConfig();
   
-  // 调度器状态（桌面端）
+  // 调度器状态（桌面端）- 与 Electron 主进程同步
   const [schedulerRunning, setSchedulerRunning] = useState(false);
+  
+  // 同步 Electron 调度器状态
+  useEffect(() => {
+    if (!inElectron) return;
+    
+    const electronAPI = (window as any).electronAPI;
+    if (!electronAPI) return;
+    
+    // 获取初始状态
+    electronAPI.getCreationSchedulerStatus().then((status: { isRunning: boolean }) => {
+      console.log('[AutoPublish] 调度器初始状态:', status);
+      setSchedulerRunning(status.isRunning);
+    }).catch((error: Error) => {
+      console.error('[AutoPublish] 获取调度器状态失败:', error);
+    });
+    
+    // 监听状态变化
+    const unsubscribe = electronAPI.onCreationSchedulerStatus((status: { status: string }) => {
+      console.log('[AutoPublish] 调度器状态变化:', status);
+      setSchedulerRunning(status.status === 'running');
+    });
+    
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [inElectron]);
+  
+  // 切换调度器状态
+  const handleToggleScheduler = async () => {
+    const electronAPI = (window as any).electronAPI;
+    if (!electronAPI) {
+      console.error('[AutoPublish] Electron API 不可用');
+      return;
+    }
+    
+    try {
+      const result = await electronAPI.toggleCreationScheduler(!schedulerRunning);
+      console.log('[AutoPublish] 切换调度器结果:', result);
+      if (result.success) {
+        setSchedulerRunning(!schedulerRunning);
+      }
+    } catch (error) {
+      console.error('[AutoPublish] 切换调度器失败:', error);
+    }
+  };
   
   // 迁移 localStorage 数据到数据库
   const migrateLocalPlans = async () => {
@@ -314,6 +359,12 @@ export default function AutoPublishPage() {
     }
     
     try {
+      console.log('[AutoPublish] 创建计划请求:', {
+        businessId: selectedBusiness,
+        planName: basicForm.planName,
+        frequency: basicForm.frequency,
+      });
+      
       const response = await fetch('/api/creation-plans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -336,6 +387,7 @@ export default function AutoPublishPage() {
       });
       
       const result = await response.json();
+      console.log('[AutoPublish] 创建计划响应:', result);
       
       if (response.ok && result.success) {
         toast.success('计划创建成功');
@@ -343,11 +395,12 @@ export default function AutoPublishPage() {
         resetForm();
         loadData();
       } else {
+        console.error('[AutoPublish] 创建失败:', result);
         toast.error(result.error || '创建失败，请重试');
       }
     } catch (error) {
-      console.error('创建计划失败:', error);
-      toast.error('创建失败，请重试');
+      console.error('[AutoPublish] 创建计划异常:', error);
+      toast.error(`创建失败: ${error instanceof Error ? error.message : '网络错误'}`);
     }
   };
   
@@ -559,7 +612,7 @@ export default function AutoPublishPage() {
                 </div>
                 <Button
                   variant={schedulerRunning ? 'destructive' : 'default'}
-                  onClick={() => setSchedulerRunning(!schedulerRunning)}
+                  onClick={handleToggleScheduler}
                 >
                   {schedulerRunning ? (
                     <>
