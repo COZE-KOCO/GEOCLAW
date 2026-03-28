@@ -6,11 +6,15 @@ import { type GenerationConfig } from '@/lib/types/generation-config';
 import { type ArticleType } from '@/lib/content-generation';
 
 // 文章类型映射
+// what: 什么是 -> faq (常见问题，解释"什么是XX")
+// how: 如何 -> guide (实操指南，解释"如何XX")
+// top: TOP排行 -> product-review (产品评测)
+// normal: 常规 -> auto (AI自动判断最合适的类型)
 export const articleTypeMap: Record<string, ArticleType> = {
   'what': 'faq',
   'how': 'guide',
   'top': 'product-review',
-  'normal': 'guide',
+  'normal': 'auto',
 };
 
 // 篇幅映射

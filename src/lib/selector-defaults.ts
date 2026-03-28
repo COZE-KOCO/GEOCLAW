@@ -99,11 +99,11 @@ export const DEFAULT_PLATFORM_CONFIGS: PlatformSelectorConfig[] = [
       waitForImageUpload: true,
       imageUploadWait: 5000,
       publishWait: 5000,
-      pageLoadWait: 3000,
+      pageLoadWait: 5000,
       retryCount: 3,
       retryDelay: 1000,
     },
-    prepareScript: `await new Promise(r => setTimeout(r, 3000));
+    prepareScript: `await new Promise(r => setTimeout(r, 5000));
 const closeBtns = document.querySelectorAll('.close-btn, .modal-close, [class*="close"], .ant-modal-close');
 closeBtns.forEach(btn => { try { btn.click(); } catch(e) {} });`,
     totalAttempts: 0,

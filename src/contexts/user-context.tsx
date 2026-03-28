@@ -69,13 +69,19 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await fetch('/api/auth/logout', { 
+        method: 'POST',
+        credentials: 'include', // 确保发送和接收 cookie
+      });
       setUser(null);
-      router.push('/login');
+      // 使用 window.location.href 强制刷新页面，确保清除所有缓存状态
+      window.location.href = '/login';
     } catch (error) {
       console.error('Logout failed:', error);
+      // 即使 API 调用失败，也强制跳转到登录页
+      window.location.href = '/login';
     }
-  }, [router]);
+  }, []);
 
   // 初始加载用户信息
   useEffect(() => {

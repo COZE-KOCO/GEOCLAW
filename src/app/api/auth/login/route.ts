@@ -36,7 +36,8 @@ export async function POST(request: NextRequest) {
       user: result.user,
     });
 
-    // 主 cookie：用于 Web 端（支持 iframe 场景）
+    // 设置新的主 cookie：用于 Web 端（支持 iframe 场景）
+    // maxAge 会自动覆盖同名的旧 cookie
     response.cookies.set('user_token', token, {
       httpOnly: true,
       secure: true,
@@ -46,7 +47,7 @@ export async function POST(request: NextRequest) {
       path: '/',
     });
 
-    // 备用 cookie：用于 Electron 桌面端（不使用 partitioned）
+    // 设置新的备用 cookie：用于 Electron 桌面端（不使用 partitioned）
     // Electron 的 session API 可能无法正确获取 partitioned cookie
     // 所以额外设置一个非 partitioned 的 cookie 作为备用
     response.cookies.set('user_token_electron', token, {

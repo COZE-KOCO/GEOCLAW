@@ -116,7 +116,7 @@ function BatchCreateContent() {
             id: rule.id,
             name: rule.name,
             description: rule.description,
-            type: rule.ruleType === 'image-text' ? 'image-text' : 'article',
+            type: rule.type === 'image-text' ? 'image-text' : 'article',
             config: rule.config || {},
           }));
           setSavedRules(formattedRules);

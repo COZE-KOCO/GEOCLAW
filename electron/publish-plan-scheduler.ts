@@ -154,9 +154,15 @@ export class PublishPlanScheduler {
       try {
         const mainSession = this.mainWindow.webContents.session;
         const cookies = await mainSession.cookies.get({});
-        const userToken = cookies.find(c => c.name === 'user_token');
+        
+        // 优先使用 user_token_electron（Electron 兼容），其次 user_token
+        const userToken = cookies.find(c => c.name === 'user_token_electron') || 
+                          cookies.find(c => c.name === 'user_token');
+        
         if (userToken) {
-          cookieHeader = `user_token=${userToken.value}`;
+          cookieHeader = `${userToken.name}=${userToken.value}`;
+        } else {
+          console.warn('[PublishPlanScheduler] 未找到认证 cookie，可用:', cookies.map(c => c.name).join(', '));
         }
       } catch (e) {
         console.warn('[PublishPlanScheduler] 获取认证 cookie 失败:', e);
@@ -188,7 +194,13 @@ export class PublishPlanScheduler {
             res.on('end', () => {
               try {
                 const parsed = JSON.parse(data);
-                resolve({ success: res.statusCode! < 400, data: parsed });
+                // 正确提取错误信息：优先使用响应体中的 error 字段
+                const errorMsg = parsed.error || parsed.message || '未知错误';
+                resolve({ 
+                  success: res.statusCode! < 400, 
+                  data: parsed,
+                  error: res.statusCode! >= 400 ? errorMsg : undefined 
+                });
               } catch {
                 resolve({ success: false, error: '解析响应失败' });
               }

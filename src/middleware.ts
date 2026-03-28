@@ -47,8 +47,8 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // 检查是否有token
-  const userToken = request.cookies.get('user_token');
+  // 检查是否有token（支持两种 cookie）
+  const userToken = request.cookies.get('user_token') || request.cookies.get('user_token_electron');
   const adminToken = request.cookies.get('admin_token');
 
   // 如果是管理端路径（/admin 或 /admin/xxx）

@@ -4,6 +4,16 @@
  */
 
 import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { S3Storage } from 'coze-coding-dev-sdk';
+
+// 初始化对象存储（用于生成签名 URL）
+const storage = new S3Storage({
+  endpointUrl: process.env.COZE_BUCKET_ENDPOINT_URL,
+  accessKey: '',
+  secretKey: '',
+  bucketName: process.env.COZE_BUCKET_NAME,
+  region: 'cn-beijing',
+});
 
 export type AssetType = 'image' | 'video' | 'audio' | 'document';
 export type AssetStatus = 'active' | 'deleted' | 'processing';
@@ -142,10 +152,37 @@ export async function getAssetsByBusiness(
   const { data, error } = await query;
   if (error) {
     console.error('获取素材列表失败:', error);
+    // 表不存在时返回空数组而不是抛出错误
+    if (error.code === '42P01' || error.message?.includes('Could not find the table')) {
+      console.warn('assets 表不存在，请先创建数据库表');
+      return [];
+    }
     return [];
   }
 
-  return data.map(mapDbAssetToAsset);
+  // 转换数据并动态生成签名 URL
+  const assets = data.map(mapDbAssetToAsset);
+  
+  // 为有 storageKey 的素材生成签名 URL
+  const assetsWithUrls = await Promise.all(
+    assets.map(async (asset) => {
+      if (asset.storageKey) {
+        try {
+          const signedUrl = await storage.generatePresignedUrl({
+            key: asset.storageKey,
+            expireTime: 86400, // 1 天有效期
+          });
+          return { ...asset, url: signedUrl };
+        } catch (e) {
+          console.error('生成签名 URL 失败:', e);
+          return asset;
+        }
+      }
+      return asset;
+    })
+  );
+
+  return assetsWithUrls;
 }
 
 /**
@@ -169,7 +206,7 @@ export async function getAssetById(id: string): Promise<Asset | null> {
 /**
  * 创建素材
  */
-export async function createAsset(input: CreateAssetInput): Promise<Asset | null> {
+export async function createAsset(input: CreateAssetInput): Promise<{ asset: Asset | null; error?: string }> {
   const client = getSupabaseClient();
   const { data, error } = await client
     .from('assets')
@@ -196,10 +233,14 @@ export async function createAsset(input: CreateAssetInput): Promise<Asset | null
 
   if (error) {
     console.error('创建素材失败:', error);
-    return null;
+    // 表不存在
+    if (error.code === '42P01' || error.message?.includes('Could not find the table')) {
+      return { asset: null, error: '数据库表 assets 不存在，请先创建数据库表' };
+    }
+    return { asset: null, error: error.message };
   }
 
-  return mapDbAssetToAsset(data);
+  return { asset: mapDbAssetToAsset(data) };
 }
 
 /**

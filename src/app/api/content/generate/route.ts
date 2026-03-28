@@ -19,6 +19,8 @@ import {
 } from '@/lib/content-generation';
 import { 
   processImageMarkers, 
+  processStockImages,
+  processArticleImages,
   extractImageHeaders,
 } from '@/lib/image-generation';
 import { selectArticleType, articleTypeMap, articleSizeMap } from './utils';
@@ -236,6 +238,14 @@ export async function POST(request: NextRequest) {
       enableWebSearch: config.enableWebSearch,
       knowledgeBaseId: config.knowledgeBaseId,
       includeKeywords: config.includeKeywords,
+      
+      // 图文笔记专属设置
+      targetPlatforms: config.targetPlatforms,
+      emojiDensity: config.emojiDensity,
+      hashtagCount: config.hashtagCount,
+      paragraphStyle: config.paragraphStyle,
+      enableHook: config.enableHook,
+      enableCTA: config.enableCTA,
     };
     
     // 调用内容生成服务
@@ -248,21 +258,26 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // AI 生图后处理：解析图片标注并生成实际图片
+    // 图片后处理：根据配置处理图片标注
     let finalContent = result.generated.content;
     let coverImageUrl: string | undefined;
     let contentImageUrls: string[] = [];
     
-    if (config.imageSource === 'ai') {
+    // 提取请求头用于图片生成 API
+    const customHeaders = extractImageHeaders(request.headers);
+    
+    // 使用统一的图片处理入口
+    if (config.imageSource !== 'none') {
       try {
-        // 提取请求头用于图片生成 API
-        const customHeaders = extractImageHeaders(request.headers);
+        console.log(`[图片处理] 开始处理，来源: ${config.imageSource}`);
         
-        console.log('开始 AI 生图处理...');
-        const imageResult = await processImageMarkers(result.generated.content, {
+        const imageResult = await processArticleImages(result.generated.content, {
+          imageSource: config.imageSource,
+          businessId: businessId,
+          imageFilter: config.imageFilter,
           customHeaders,
           onProgress: (stage, current, total) => {
-            console.log(`AI 生图进度: ${stage} ${current}/${total}`);
+            console.log(`[图片处理] ${stage}: ${current}/${total}`);
           },
         });
         
@@ -270,23 +285,23 @@ export async function POST(request: NextRequest) {
         
         if (imageResult.coverImage) {
           coverImageUrl = imageResult.coverImage.url;
-          console.log('封面图生成成功:', coverImageUrl);
+          console.log('[图片处理] 封面图处理成功');
         }
         
         if (imageResult.contentImages.length > 0) {
           contentImageUrls = imageResult.contentImages.map(img => img.url);
-          console.log(`生成了 ${contentImageUrls.length} 张内容配图`);
+          console.log(`[图片处理] 处理了 ${contentImageUrls.length} 张内容配图`);
         }
         
         // 更新 distillationWords 中的图片信息
         if (coverImageUrl || contentImageUrls.length > 0) {
           result.generated.distillationWords.push(
-            `[AI生图] 封面: ${coverImageUrl ? '已生成' : '未生成'}, 配图: ${contentImageUrls.length}张`
+            `[图片处理] 封面: ${coverImageUrl ? '已处理' : '未处理'}, 配图: ${contentImageUrls.length}张`
           );
         }
       } catch (imageError) {
-        console.error('AI 生图处理失败:', imageError);
-        // 生图失败不影响文章保存，继续使用原文内容
+        console.error('[图片处理] 处理失败:', imageError);
+        // 图片处理失败不影响文章保存，继续使用原文内容
       }
     }
     

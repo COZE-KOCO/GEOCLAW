@@ -601,15 +601,20 @@ export default function AutoPublishPage() {
     try {
       const rulesResponse = await fetch(`/api/creation-rules?businessId=${selectedBusiness}`);
       const rulesData = await rulesResponse.json();
+      console.log('[AutoPublish] API 返回的规则数据:', rulesData);
       if (rulesResponse.ok && rulesData.rules) {
         // 转换规则数据格式
-        const formattedRules: SavedRule[] = rulesData.rules.map((rule: any) => ({
-          id: rule.id,
-          name: rule.name,
-          description: rule.description,
-          type: rule.ruleType === 'image-text' ? 'image-text' : 'article',
-          config: rule.config || {},
-        }));
+        const formattedRules: SavedRule[] = rulesData.rules.map((rule: any) => {
+          console.log('[AutoPublish] 原始规则:', rule.id, rule.name, 'type:', rule.type);
+          return {
+            id: rule.id,
+            name: rule.name,
+            description: rule.description,
+            type: rule.type === 'image-text' ? 'image-text' : 'article',
+            config: rule.config || {},
+          };
+        });
+        console.log('[AutoPublish] 格式化后的规则:', formattedRules);
         setSavedRules(formattedRules);
       } else {
         setSavedRules([]);
@@ -622,6 +627,8 @@ export default function AutoPublishPage() {
   
   // 加载规则配置
   const loadRuleConfig = (rule: SavedRule) => {
+    console.log('[AutoPublish] 加载规则配置:', rule);
+    console.log('[AutoPublish] 规则类型:', rule.type);
     setSelectedRule(rule);
     loadConfig({
       ruleId: rule.id,
@@ -1762,7 +1769,11 @@ export default function AutoPublishPage() {
                     onChange={updateConfig}
                     openModules={openModules}
                     onToggleModule={toggleModule}
-                    mode="article"
+                    mode={(() => {
+                      const mode = selectedRule?.type === 'image-text' ? 'image-text' : 'article';
+                      console.log('[AutoPublish] ConfigModules mode 计算:', mode, 'selectedRule?.type:', selectedRule?.type);
+                      return mode;
+                    })()}
                     keywordLibraries={keywordLibraries}
                   />
                 </div>
@@ -2075,7 +2086,7 @@ export default function AutoPublishPage() {
                     onChange={updateConfig}
                     openModules={openModules}
                     onToggleModule={toggleModule}
-                    mode="article"
+                    mode={selectedRule?.type === 'image-text' ? 'image-text' : 'article'}
                     keywordLibraries={keywordLibraries}
                   />
                 </div>

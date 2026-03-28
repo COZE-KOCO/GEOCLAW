@@ -22,7 +22,8 @@ export type ModuleId =
   | 'structure' 
   | 'internal' 
   | 'external' 
-  | 'fixed';
+  | 'fixed'
+  | 'image-text-settings';
 
 /** 配置模块定义 */
 export interface ConfigModule {

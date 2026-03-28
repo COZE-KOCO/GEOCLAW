@@ -225,9 +225,18 @@ const PLATFORM_PUBLISH_CONFIG: Record<string, PlatformConfig> = {
         '[contenteditable="true"]',                 // 通用可编辑区域（最后备选）
       ],
       imageUpload: [
+        // 头条编辑器使用字节跳动组件，file input 通常在点击图片按钮后出现
+        '[class*="ImageUpload"] input[type="file"]',
+        '[class*="image-upload"] input[type="file"]',
+        '[class*="upload-image"] input[type="file"]',
+        '.byte-upload-input input[type="file"]',
+        '[class*="byte"] input[type="file"][accept*="image"]',
+        // 编辑器内的图片上传
+        '.editor-toolbar input[type="file"]',
+        '[class*="toolbar"] input[type="file"]',
+        // 通用备选
         '.image-upload input[type="file"]',
         'input[type="file"][accept*="image"]',
-        '.upload-btn input[type="file"]',
         'input[type="file"]'
       ],
       // 发布按钮
@@ -268,12 +277,28 @@ const PLATFORM_PUBLISH_CONFIG: Record<string, PlatformConfig> = {
       });
       
       // 等待编辑器加载完成
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 2000));
       
-      // 打印页面状态用于调试
+      // 打印页面状态用于调试 - 详细版本
       const titleInput = document.querySelector('#title, input[placeholder*="标题"]');
       const contentEditor = document.querySelector('[contenteditable="true"]');
       console.log('[AutoPublisher] 标题输入框存在:', !!titleInput, '内容编辑器存在:', !!contentEditor);
+      
+      // 打印页面上所有 input 元素（帮助调试）
+      const allInputs = document.querySelectorAll('input[type="text"], input:not([type])');
+      console.log('[AutoPublisher] 页面上找到', allInputs.length, '个文本输入框');
+      allInputs.forEach((input, index) => {
+        const el = input as HTMLInputElement;
+        console.log('[AutoPublisher] Input', index + 1, '- id:', el.id, 'name:', el.name, 'placeholder:', el.placeholder, 'class:', el.className.substring(0, 50));
+      });
+      
+      // 打印页面上所有可编辑元素
+      const editables = document.querySelectorAll('[contenteditable="true"]');
+      console.log('[AutoPublisher] 页面上找到', editables.length, '个可编辑元素');
+      
+      // 检查是否有 iframe
+      const iframes = document.querySelectorAll('iframe');
+      console.log('[AutoPublisher] 页面上找到', iframes.length, '个 iframe');
       
       console.log('[AutoPublisher] 头条 prepareScript 执行完成');
     `,
@@ -659,8 +684,8 @@ export class AutoPublisher {
         if (window.webContents.isLoading()) {
           setTimeout(checkReady, 100);
         } else {
-          // 额外等待确保动态内容加载
-          setTimeout(resolve, 2000);
+          // 额外等待确保动态内容加载（增加到5秒）
+          setTimeout(resolve, 5000);
         }
       };
       
@@ -798,7 +823,22 @@ export class AutoPublisher {
           }
         }
         
+        // 所有选择器都失败，打印页面诊断信息
         console.error('[AutoPublisher] 所有选择器都未能成功填写');
+        console.log('[AutoPublisher] === 页面诊断信息 ===');
+        
+        // 检查是否有遮罩层或弹窗
+        const modals = document.querySelectorAll('.modal, .dialog, [class*="modal"], [role="dialog"]');
+        console.log('[AutoPublisher] 检测到', modals.length, '个弹窗/遮罩层');
+        
+        // 检查是否有加载中的指示器
+        const loadings = document.querySelectorAll('.loading, [class*="loading"], .spinner');
+        console.log('[AutoPublisher] 检测到', loadings.length, '个加载指示器');
+        
+        // 再次打印所有输入框
+        const inputs = document.querySelectorAll('input, textarea');
+        console.log('[AutoPublisher] 页面共有', inputs.length, '个输入元素');
+        
         return false;
       })();
     `;
@@ -918,15 +958,7 @@ export class AutoPublisher {
     config: PlatformConfig,
     imageUrls: string[]
   ): Promise<Record<string, string>> {
-    const selectors = config.selectors.imageUpload;
-    const selectorArray: string[] = Array.isArray(selectors) ? selectors : (selectors ? [selectors] : []);
-    
-    if (selectorArray.length === 0) {
-      console.log(`[AutoPublisher] 该平台不支持图片上传`);
-      return {};
-    }
-
-    console.log(`[AutoPublisher] 开始上传 ${imageUrls.length} 张图片...`);
+    console.log(`[AutoPublisher] 开始上传 ${imageUrls.length} 张图片（粘贴模式）...`);
     
     const urlMap: Record<string, string> = {};
 
@@ -935,16 +967,19 @@ export class AutoPublisher {
       console.log(`[AutoPublisher] 上传图片 ${i + 1}/${imageUrls.length}: ${imageUrl.substring(0, 50)}...`);
 
       try {
-        // 在页面中执行图片上传脚本
-        // 策略改进：先尝试点击可见的上传按钮，然后再注入文件
-        const result = await window.webContents.executeJavaScript(`
+        // 使用 Electron 原生粘贴模式上传图片
+        const safeImageUrl = JSON.stringify(imageUrl);
+        const contentEditorSelectors = config.selectors.contentEditor || [];
+        const safeEditorSelectors = JSON.stringify(Array.isArray(contentEditorSelectors) ? contentEditorSelectors : [contentEditorSelectors]);
+        
+        // ========== 阶段1: 在页面内准备图片并写入剪贴板 ==========
+        const prepareResult = await window.webContents.executeJavaScript(`
           (async function() {
-            const imageUrl = '${imageUrl}';
-            const selectors = ${JSON.stringify(selectorArray)};
-            const imageIndex = ${i};
+            const imageUrl = ${safeImageUrl};
+            const editorSelectors = ${safeEditorSelectors};
             
             try {
-              // ========== 步骤1: fetch 远程图片 ==========
+              // 步骤1: fetch 远程图片
               console.log('[AutoPublisher] 开始fetch图片:', imageUrl);
               const response = await fetch(imageUrl, {
                 method: 'GET',
@@ -957,243 +992,150 @@ export class AutoPublisher {
               }
               
               const blob = await response.blob();
-              console.log('[AutoPublisher] 图片大小:', blob.size, 'bytes');
+              console.log('[AutoPublisher] 图片大小:', blob.size, 'bytes, type:', blob.type);
               
-              // 从 URL 提取文件名
-              let filename = 'image.jpg';
-              try {
-                const urlPath = new URL(imageUrl).pathname;
-                const pathParts = urlPath.split('/');
-                filename = pathParts[pathParts.length - 1] || 'image.jpg';
-                filename = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-              } catch (e) {}
+              // 步骤2: 写入剪贴板（必须转换为 PNG）
+              let pngBlob = blob;
               
-              const file = new File([blob], filename, { 
-                type: blob.type || 'image/jpeg' 
+              if (blob.type !== 'image/png') {
+                console.log('[AutoPublisher] 将图片转换为 PNG 格式...');
+                const img = await createImageBitmap(blob);
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                
+                pngBlob = await new Promise(function(resolve) {
+                  canvas.toBlob(function(b) {
+                    resolve(b);
+                  }, 'image/png');
+                });
+                console.log('[AutoPublisher] 转换后 PNG 大小:', pngBlob.size, 'bytes');
+              }
+              
+              // 写入剪贴板
+              const clipboardItem = new ClipboardItem({
+                'image/png': pngBlob
               });
-              console.log('[AutoPublisher] 创建File对象:', file.name, file.type, file.size);
+              await navigator.clipboard.write([clipboardItem]);
+              console.log('[AutoPublisher] 图片已写入剪贴板');
               
-              // ========== 步骤2: 尝试点击可见的上传按钮 ==========
-              // 查找页面上可见的上传按钮/区域
-              const uploadButtonSelectors = [
-                // 常见的上传按钮选择器
-                'button[class*="upload"]',
-                '[class*="upload-btn"]',
-                '[class*="uploadButton"]',
-                '.upload-trigger',
-                '.upload-area',
-                '.image-upload-btn',
-                '[class*="add-image"]',
-                '[class*="addImage"]',
-                // 图标按钮
-                'button[title*="上传"]',
-                'button[title*="图片"]',
-                '[aria-label*="上传"]',
-                '[aria-label*="图片"]',
-                // 工具栏中的图片按钮
-                '.toolbar [class*="image"]',
-                '.editor-toolbar [class*="image"]',
-                '[class*="toolbar"] [class*="image"]',
-              ];
-              
-              let uploadButtonClicked = false;
-              let fileInput = null;
-              
-              // 先尝试找到隐藏的 file input
-              for (const sel of selectors) {
-                const input = document.querySelector(sel);
-                if (input && input.type === 'file') {
-                  fileInput = input;
-                  console.log('[AutoPublisher] 找到file input:', sel);
+              // 步骤3: 找到并聚焦编辑器
+              let editor = null;
+              for (const sel of editorSelectors) {
+                const el = document.querySelector(sel);
+                if (el) {
+                  editor = el;
+                  console.log('[AutoPublisher] 找到编辑器:', sel);
                   break;
                 }
               }
               
-              // 尝试点击可见的上传按钮
-              for (const sel of uploadButtonSelectors) {
-                try {
-                  const btn = document.querySelector(sel);
-                  if (btn && btn.offsetParent !== null) { // 确保元素可见
-                    console.log('[AutoPublisher] 找到可见的上传按钮:', sel);
-                    
-                    // 点击前记录现有的 file input 数量
-                    const inputsBefore = document.querySelectorAll('input[type="file"]').length;
-                    
-                    // 模拟点击
-                    btn.focus();
-                    btn.click();
-                    btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                    
-                    // 等待一下，看是否有新的 file input 出现
-                    await new Promise(r => setTimeout(r, 500));
-                    
-                    const inputsAfter = document.querySelectorAll('input[type="file"]').length;
-                    console.log('[AutoPublisher] 点击后 file inputs:', inputsBefore, '->', inputsAfter);
-                    
-                    // 如果有新的 input 出现，或者原本就有 input
-                    if (inputsAfter > 0) {
-                      uploadButtonClicked = true;
-                      // 重新查找 file input（可能是新创建的）
-                      const inputs = document.querySelectorAll('input[type="file"]');
-                      for (const input of inputs) {
-                        if (input) {
-                          fileInput = input;
-                          break;
-                        }
-                      }
-                      break;
-                    }
-                  }
-                } catch (e) {
-                  console.log('[AutoPublisher] 点击上传按钮失败:', sel, e);
+              if (!editor) {
+                editor = document.querySelector('[contenteditable="true"]');
+                if (editor) {
+                  console.log('[AutoPublisher] 使用 contenteditable 编辑器');
                 }
               }
               
-              // 如果没找到可见按钮或者点击后没有效果，直接使用找到的 file input
-              if (!fileInput) {
-                console.log('[AutoPublisher] 未找到合适的 file input');
-                return { success: false, error: '找不到文件上传控件' };
+              if (!editor) {
+                throw new Error('找不到编辑器');
               }
               
-              // ========== 步骤3: 注入文件到 file input ==========
-              console.log('[AutoPublisher] 开始注入文件...');
+              editor.focus();
+              console.log('[AutoPublisher] 编辑器已聚焦');
               
-              const dataTransfer = new DataTransfer();
-              dataTransfer.items.add(file);
-              fileInput.files = dataTransfer.files;
-              
-              // 触发多种事件以确保兼容性
-              fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-              fileInput.dispatchEvent(new Event('input', { bubbles: true }));
-              
-              // 某些框架需要触发更具体的事件
-              fileInput.dispatchEvent(new Event('filechange', { bubbles: true }));
-              
-              // 也尝试触发 click 事件（某些框架监听这个）
-              if (uploadButtonClicked) {
-                fileInput.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-              }
-              
-              console.log('[AutoPublisher] 已注入文件到 input');
-              
-              // ========== 步骤4: 等待上传开始 ==========
-              await new Promise(r => setTimeout(r, 1000));
-              
-              // 检查是否有上传进度或成功状态
-              let uploadStarted = false;
-              let uploadCompleted = false;
-              let uploadedImgUrl = null;
-              
-              // 等待上传完成（最多等待30秒）
-              const maxWaitTime = 30000;
-              const checkInterval = 500;
-              let waited = 0;
-              
-              while (waited < maxWaitTime) {
-                await new Promise(r => setTimeout(r, checkInterval));
-                waited += checkInterval;
-                
-                // 检查上传进度
-                const progressBars = document.querySelectorAll('[class*="progress"], [class*="uploading"], [class*="loading"]');
-                const hasProgress = Array.from(progressBars).some(el => el.offsetParent !== null);
-                
-                if (hasProgress) {
-                  uploadStarted = true;
-                  console.log('[AutoPublisher] 检测到上传进度...');
-                  continue;
-                }
-                
-                // 如果曾经有进度现在没有了，说明上传完成了
-                if (uploadStarted && !hasProgress) {
-                  console.log('[AutoPublisher] 上传进度完成');
-                  uploadCompleted = true;
-                }
-                
-                // 检查图片预览是否出现（说明上传成功）
-                const previewSelectors = [
-                  '.image-preview img',
-                  '.upload-preview img',
-                  '.uploaded-img img',
-                  '[class*="image-item"] img',
-                  '[class*="imageItem"] img',
-                  '[class*="uploaded"] img',
-                  '.ql-editor img', // Quill 编辑器
-                  '[contenteditable="true"] img', // 富文本编辑器中的图片
-                ];
-                
-                for (const sel of previewSelectors) {
-                  const img = document.querySelector(sel);
-                  if (img && img.src && !img.src.includes('placeholder') && !img.src.includes('loading')) {
-                    // 检查这个图片是不是刚上传的（通过时间或URL判断）
-                    console.log('[AutoPublisher] 检测到图片预览:', sel, img.src.substring(0, 50));
-                    uploadedImgUrl = img.src;
-                    uploadCompleted = true;
-                    break;
-                  }
-                }
-                
-                // 检查成功提示
-                const successSelectors = ['.toast-success', '.ant-message-success', '.el-message--success'];
-                for (const sel of successSelectors) {
-                  const el = document.querySelector(sel);
-                  if (el && el.offsetParent !== null) {
-                    const text = el.textContent || '';
-                    if (text.includes('成功') || text.includes('上传')) {
-                      console.log('[AutoPublisher] 检测到成功提示:', text.substring(0, 50));
-                      uploadCompleted = true;
-                      break;
-                    }
-                  }
-                }
-                
-                // 检查错误提示
-                const errorSelectors = ['.toast-error', '.ant-message-error', '.el-message--error'];
-                for (const sel of errorSelectors) {
-                  const el = document.querySelector(sel);
-                  if (el && el.offsetParent !== null) {
-                    const text = el.textContent || '';
-                    if (text.includes('失败') || text.includes('错误')) {
-                      console.log('[AutoPublisher] 检测到错误提示:', text.substring(0, 50));
-                      return { success: false, error: '上传失败: ' + text.substring(0, 100) };
-                    }
-                  }
-                }
-                
-                if (uploadCompleted) {
-                  break;
-                }
-                
-                // 每5秒打印一次状态
-                if (waited % 5000 === 0) {
-                  console.log('[AutoPublisher] 等待上传完成... 已等待', waited / 1000, '秒');
-                }
-              }
-              
-              if (!uploadCompleted) {
-                console.log('[AutoPublisher] 上传超时，但可能已成功');
-              }
-              
-              return { 
-                success: true, 
-                filename: file.name,
-                uploadedUrl: uploadedImgUrl,
-                uploadStarted: uploadStarted
-              };
+              return { success: true, editorFound: true };
               
             } catch (e) {
-              console.error('[AutoPublisher] 上传失败:', e);
+              console.error('[AutoPublisher] 准备阶段失败:', e);
               return { success: false, error: e.message };
             }
           })();
         `);
 
-        if (result.success) {
-          console.log(`[AutoPublisher] 图片上传成功: ${result.filename}, 上传进度检测: ${result.uploadStarted || false}`);
+        if (!prepareResult.success) {
+          console.error(`[AutoPublisher] 图片准备失败: ${prepareResult.error}`);
+          continue;
+        }
+
+        // ========== 阶段2: 使用 Electron 原生 API 粘贴 ==========
+        console.log('[AutoPublisher] 使用 Electron 原生 paste API...');
+        
+        // 等待编辑器聚焦生效
+        await new Promise(r => setTimeout(r, 500));
+        
+        // 使用 Electron 原生粘贴 API
+        window.webContents.paste();
+        console.log('[AutoPublisher] 已执行原生粘贴');
+        
+        // ========== 阶段3: 等待上传并检测结果 ==========
+        await new Promise(r => setTimeout(r, 3000));
+        
+        const detectResult = await window.webContents.executeJavaScript(`
+          (async function() {
+            const imageUrl = ${safeImageUrl};
+            
+            // 检查编辑器中是否有新图片
+            const editor = document.querySelector('[contenteditable="true"]') || 
+                          document.querySelector('.public-DraftEditor-content') ||
+                          document.querySelector('.ProseMirror') ||
+                          document.querySelector('[data-placeholder]');
+            
+            if (!editor) {
+              return { success: false, error: '找不到编辑器' };
+            }
+            
+            const imgs = editor.querySelectorAll('img');
+            let uploadedUrl = null;
+            
+            for (const img of imgs) {
+              // 检查是否是刚上传的图片（URL 不包含原始链接）
+              if (img.src && !img.src.includes('coze-coding-project') && !img.src.includes(imageUrl)) {
+                uploadedUrl = img.src;
+                console.log('[AutoPublisher] 检测到上传后的图片:', uploadedUrl.substring(0, 80));
+                break;
+              }
+            }
+            
+            if (uploadedUrl) {
+              return { success: true, uploadedUrl: uploadedUrl };
+            } else {
+              // 再等待一段时间重试
+              await new Promise(r => setTimeout(r, 2000));
+              
+              const imgs2 = editor.querySelectorAll('img');
+              for (const img of imgs2) {
+                if (img.src && !img.src.includes('coze-coding-project') && !img.src.includes(imageUrl)) {
+                  uploadedUrl = img.src;
+                  console.log('[AutoPublisher] 延迟检测到上传后的图片:', uploadedUrl.substring(0, 80));
+                  break;
+                }
+              }
+              
+              if (uploadedUrl) {
+                return { success: true, uploadedUrl: uploadedUrl };
+              } else {
+                console.log('[AutoPublisher] 未能检测到上传后的图片URL');
+                // 返回当前编辑器中所有图片的数量，用于调试
+                return { 
+                  success: false, 
+                  error: '未能检测到上传后的图片URL',
+                  imgCount: imgs.length 
+                };
+              }
+            }
+          })();
+        `);
+
+        if (detectResult.success) {
+          console.log(`[AutoPublisher] 图片上传成功，已获取上传后URL`);
           
           // 如果页面返回了上传后的 URL，直接使用
-          if (result.uploadedUrl) {
-            urlMap[imageUrl] = result.uploadedUrl;
-            console.log(`[AutoPublisher] 页面返回的上传后URL: ${result.uploadedUrl.substring(0, 50)}...`);
+          if (detectResult.uploadedUrl) {
+            urlMap[imageUrl] = detectResult.uploadedUrl;
+            console.log(`[AutoPublisher] 页面返回的上传后URL: ${detectResult.uploadedUrl.substring(0, 50)}...`);
           } else {
             // 否则等待一段时间后尝试获取
             await new Promise(r => setTimeout(r, config.imageUploadWait || 2000));
@@ -1214,7 +1156,7 @@ export class AutoPublisher {
             // 不添加到 urlMap，这样内容中的图片 URL 不会被替换
           }
         } else {
-          console.error(`[AutoPublisher] 图片上传失败: ${result.error}`);
+          console.error(`[AutoPublisher] 图片上传失败: ${detectResult.error}`);
         }
         
       } catch (error: any) {

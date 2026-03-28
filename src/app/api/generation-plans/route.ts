@@ -14,7 +14,7 @@ import {
 } from '@/lib/types/generation-config';
 import { selectArticleType, articleTypeMap, articleSizeMap } from '../content/generate/utils';
 import { createContent, type ContentCreationRequest } from '@/lib/content-generation';
-import { processImageMarkers, extractImageHeaders } from '@/lib/image-generation';
+import { processImageMarkers, processArticleImages, extractImageHeaders } from '@/lib/image-generation';
 import { getCurrentUser, validateBusinessOwnership } from '@/lib/user-auth';
 import { getBusinessesByOwner } from '@/lib/business-store';
 
@@ -493,25 +493,33 @@ async function executeGenerationTasks(
       const result = await createContent(creationRequest);
       
       if (result?.generated) {
-        // AI 生图后处理
+        // 图片后处理：根据配置处理图片标注
         let finalContent = result.generated.content;
         let coverImageUrl: string | undefined;
+        let contentImageUrls: string[] = [];
         
-        if (config.imageSource === 'ai') {
+        if (config.imageSource !== 'none') {
           try {
-            console.log(`[AI生图] 处理关键词 "${keyword}" 的图片...`);
-            const imageResult = await processImageMarkers(result.generated.content, {
+            console.log(`[图片处理] 处理关键词 "${keyword}" 的图片，来源: ${config.imageSource}`);
+            
+            const imageResult = await processArticleImages(result.generated.content, {
+              imageSource: config.imageSource,
+              businessId: businessId,
+              imageFilter: config.imageFilter,
               customHeaders,
             });
             
             finalContent = imageResult.processedContent;
             if (imageResult.coverImage) {
               coverImageUrl = imageResult.coverImage.url;
-              console.log(`[AI生图] 封面图生成成功`);
+              console.log(`[图片处理] 封面图处理成功`);
             }
-            console.log(`[AI生图] 生成了 ${imageResult.contentImages.length} 张配图`);
+            if (imageResult.contentImages.length > 0) {
+              contentImageUrls = imageResult.contentImages.map(img => img.url);
+              console.log(`[图片处理] 处理了 ${contentImageUrls.length} 张配图`);
+            }
           } catch (imageError) {
-            console.error(`[AI生图] 处理失败:`, imageError);
+            console.error(`[图片处理] 处理失败:`, imageError);
           }
         }
         

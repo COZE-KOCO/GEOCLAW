@@ -73,8 +73,13 @@ export default function AccountPage() {
 
   const handleLogout = async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
-      router.push('/login');
+      const res = await fetch('/api/auth/logout', { method: 'POST' });
+      if (res.ok) {
+        // 使用 window.location.href 强制刷新页面，确保 middleware 重新检查认证状态
+        window.location.href = '/login';
+      } else {
+        console.error('退出失败:', await res.text());
+      }
     } catch (error) {
       console.error('退出失败:', error);
     }

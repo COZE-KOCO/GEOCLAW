@@ -375,6 +375,41 @@ CREATE TABLE IF NOT EXISTS generation_plans (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 素材文件夹表
+CREATE TABLE IF NOT EXISTS asset_folders (
+  id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id VARCHAR(36) NOT NULL,
+  name VARCHAR(200) NOT NULL,
+  parent_id VARCHAR(36),
+  color VARCHAR(20),
+  icon VARCHAR(50),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 素材文件表
+CREATE TABLE IF NOT EXISTS assets (
+  id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id VARCHAR(36) NOT NULL,
+  folder_id VARCHAR(36),
+  name VARCHAR(500) NOT NULL,
+  original_name VARCHAR(500),
+  type VARCHAR(20) NOT NULL,
+  mime_type VARCHAR(100),
+  size INTEGER NOT NULL,
+  url VARCHAR(1000),
+  thumbnail VARCHAR(1000),
+  storage_key VARCHAR(500),
+  width INTEGER,
+  height INTEGER,
+  duration INTEGER,
+  description TEXT,
+  tags JSONB DEFAULT '[]',
+  status VARCHAR(20) DEFAULT 'active' NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- 创建索引
 CREATE INDEX IF NOT EXISTS businesses_type_idx ON businesses(type);
 CREATE INDEX IF NOT EXISTS businesses_industry_idx ON businesses(industry);
@@ -452,6 +487,16 @@ CREATE INDEX IF NOT EXISTS keyword_libraries_business_id_idx ON keyword_librarie
 -- creation_rules 索引
 CREATE INDEX IF NOT EXISTS creation_rules_business_id_idx ON creation_rules(business_id);
 CREATE INDEX IF NOT EXISTS creation_rules_rule_type_idx ON creation_rules(rule_type);
+
+-- asset_folders 索引
+CREATE INDEX IF NOT EXISTS asset_folders_business_id_idx ON asset_folders(business_id);
+CREATE INDEX IF NOT EXISTS asset_folders_parent_id_idx ON asset_folders(parent_id);
+
+-- assets 索引
+CREATE INDEX IF NOT EXISTS assets_business_id_idx ON assets(business_id);
+CREATE INDEX IF NOT EXISTS assets_folder_id_idx ON assets(folder_id);
+CREATE INDEX IF NOT EXISTS assets_type_idx ON assets(type);
+CREATE INDEX IF NOT EXISTS assets_status_idx ON assets(status);
 `;
 
 export async function GET(request: NextRequest) {
@@ -521,6 +566,8 @@ export async function POST(request: NextRequest) {
       'creation_plans',
       'keyword_libraries',
       'creation_rules',
+      'asset_folders',
+      'assets',
     ];
 
     const results: { table: string; status: string; error?: string }[] = [];

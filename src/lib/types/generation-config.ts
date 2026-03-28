@@ -258,6 +258,26 @@ export interface GenerationConfig {
   
   /** 生成文章数量 */
   articleCount: number;
+  
+  // ========== 图文笔记专属设置（仅 mode=image-text 时生效）==========
+  
+  /** 目标发布平台（小红书/抖音等） */
+  targetPlatforms: string[];
+  
+  /** Emoji密度 */
+  emojiDensity: 'none' | 'low' | 'medium' | 'high';
+  
+  /** 话题标签数量 */
+  hashtagCount: number;
+  
+  /** 段落风格 */
+  paragraphStyle: 'short' | 'medium';
+  
+  /** 开头钩子（吸引注意力的开头） */
+  enableHook: boolean;
+  
+  /** 结尾引导（引导互动） */
+  enableCTA: boolean;
 }
 
 // ==================== 默认配置 ====================
@@ -282,12 +302,12 @@ export const defaultGenerationConfig: GenerationConfig = {
   // 描述设置
   description: '',
   
-  // 创作类型 - 文章类型分布
+  // 创作类型 - 文章类型分布（默认均衡分布）
   articleTypeDistribution: {
-    what: 0,
-    how: 0,
-    top: 0,
-    normal: 100,
+    what: 25,
+    how: 25,
+    top: 25,
+    normal: 25,
   },
   
   // TOP排行设置
@@ -360,6 +380,14 @@ export const defaultGenerationConfig: GenerationConfig = {
     'doubao-seed-2-0-lite-260215': 30,
   },
   articleCount: 1,
+  
+  // 图文笔记专属设置
+  targetPlatforms: [],
+  emojiDensity: 'medium',
+  hashtagCount: 5,
+  paragraphStyle: 'short',
+  enableHook: true,
+  enableCTA: true,
 };
 
 // ==================== 可用模型列表 ====================

@@ -20,9 +20,10 @@ export default function UserLoginPage() {
   // 如果用户已登录，重定向到 dashboard
   useEffect(() => {
     if (!userLoading && user) {
-      router.replace('/dashboard');
+      // 使用 window.location.href 强制刷新，确保加载最新用户状态
+      window.location.href = '/dashboard';
     }
-  }, [user, userLoading, router]);
+  }, [user, userLoading]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

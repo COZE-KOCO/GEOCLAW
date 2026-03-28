@@ -1,6 +1,6 @@
 'use client';
 
-import { Settings, Sparkles, Image, FileText, Replace, Database, FileCode, Link2, ExternalLink, Cpu } from 'lucide-react';
+import { Settings, Sparkles, Image, FileText, Replace, Database, FileCode, Link2, ExternalLink, Cpu, Smartphone } from 'lucide-react';
 import { ModuleWrapper } from './shared/ModuleWrapper';
 import { BasicSettings } from './modules/BasicSettings';
 import { ModelSelector } from './modules/ModelSelector';
@@ -15,6 +15,7 @@ import { ArticleStructure } from './modules/ArticleStructure';
 import { InternalLinks } from './modules/InternalLinks';
 import { ExternalLinks } from './modules/ExternalLinks';
 import { FixedIntroOutro } from './modules/FixedIntroOutro';
+import { ImageTextSettings } from './modules/ImageTextSettings';
 import type { ConfigModulesProps, ModuleId } from './types';
 import type { KeywordLibrary } from '@/lib/keyword-store';
 import { AVAILABLE_MODELS } from '@/lib/types/generation-config';
@@ -24,8 +25,11 @@ const MODULE_CONFIG: {
   id: ModuleId;
   title: string;
   icon: React.ComponentType<{ className?: string }>;
+  /** 仅在指定模式下显示 */
+  modeOnly?: ('article' | 'image-text')[];
 }[] = [
   { id: 'basic', title: '基础设置', icon: Settings },
+  { id: 'image-text-settings', title: '图文设置', icon: Smartphone, modeOnly: ['image-text'] },
   { id: 'type', title: '创作类型', icon: Sparkles },
   { id: 'image', title: '图片', icon: Image },
   { id: 'content', title: '内容要求', icon: FileText },
@@ -134,6 +138,16 @@ export function ConfigModules({
         if (config.enableFixedIntro) fixed.push('开头');
         if (config.enableFixedOutro) fixed.push('结尾');
         return fixed.length > 0 ? fixed.join(' + ') : '未设置';
+      case 'image-text-settings':
+        const platforms = config.targetPlatforms || [];
+        const platformNames: Record<string, string> = {
+          'xiaohongshu': '小红书',
+          'douyin': '抖音',
+        };
+        if (platforms.length > 0) {
+          return platformNames[platforms[0]] || platforms[0];
+        }
+        return '未选择平台';
       default:
         return undefined;
     }
@@ -166,23 +180,32 @@ export function ConfigModules({
         return config.externalLinks.length > 0 || config.enableAutoExternalLinks;
       case 'fixed':
         return config.enableFixedIntro || config.enableFixedOutro;
+      case 'image-text-settings':
+        return (config.targetPlatforms?.length || 0) > 0;
       default:
         return false;
     }
   };
 
-  // 图文模式隐藏的模块
+  // 图文模式隐藏的模块（图文笔记不需要长文章的结构化配置）
   const imageTextHiddenModules: ModuleId[] = mode === 'image-text' 
-    ? ['replace', 'knowledge', 'internal', 'external', 'fixed'] 
+    ? ['replace', 'knowledge', 'internal', 'external', 'fixed', 'type', 'format', 'structure'] 
     : [];
 
   const allHiddenModules = [...hiddenModules, ...imageTextHiddenModules];
+
+  console.log('[ConfigModules] mode:', mode, 'imageTextHiddenModules:', imageTextHiddenModules, 'allHiddenModules:', allHiddenModules);
 
   return (
     <div className="divide-y">
       {MODULE_CONFIG.map((module) => {
         // 跳过隐藏的模块
         if (allHiddenModules.includes(module.id)) {
+          return null;
+        }
+
+        // 跳过不在当前模式下的模块
+        if (module.modeOnly && !module.modeOnly.includes(mode)) {
           return null;
         }
 
@@ -209,6 +232,13 @@ export function ConfigModules({
                 onChange={onChange}
                 disabled={disabled}
                 keywordLibraries={keywordLibraries}
+              />
+            )}
+            {module.id === 'image-text-settings' && (
+              <ImageTextSettings
+                config={config}
+                onChange={onChange}
+                disabled={disabled}
               />
             )}
             {module.id === 'model' && (

@@ -115,9 +115,15 @@ export class PublishScheduler {
     try {
       const mainSession = this.mainWindow.webContents.session;
       const cookies = await mainSession.cookies.get({});
-      const userToken = cookies.find(c => c.name === 'user_token');
+      
+      // 优先使用 user_token_electron（Electron 兼容），其次 user_token
+      const userToken = cookies.find(c => c.name === 'user_token_electron') || 
+                        cookies.find(c => c.name === 'user_token');
+      
       if (userToken) {
-        return `user_token=${userToken.value}`;
+        return `${userToken.name}=${userToken.value}`;
+      } else {
+        console.warn('[PublishScheduler] 未找到认证 cookie，可用:', cookies.map(c => c.name).join(', '));
       }
     } catch (e) {
       console.warn('[PublishScheduler] 获取认证 cookie 失败:', e);
@@ -163,9 +169,12 @@ export class PublishScheduler {
         res.on('end', () => {
           try {
             const parsed = JSON.parse(data);
+            // 正确提取错误信息：优先使用响应体中的 error 字段
+            const errorMsg = parsed.error || parsed.message || '未知错误';
             resolve({ 
               success: (res.statusCode ?? 500) < 400, 
               data: parsed, 
+              error: (res.statusCode ?? 500) >= 400 ? errorMsg : undefined,
               statusCode: res.statusCode 
             });
           } catch {

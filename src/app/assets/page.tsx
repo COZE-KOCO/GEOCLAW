@@ -295,33 +295,73 @@ export default function AssetsPage() {
 
   const handleUpload = async () => {
     if (uploadFiles.length === 0) return;
+    if (!selectedBusiness) {
+      toast.error('请先选择商家');
+      return;
+    }
     
     setUploading(true);
+    let successCount = 0;
+    let failCount = 0;
+    
     try {
-      // 模拟上传
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // 逐个上传文件
+      for (const file of uploadFiles) {
+        try {
+          const formData = new FormData();
+          formData.append('file', file);
+          formData.append('businessId', selectedBusiness);
+          if (selectedFolder) {
+            formData.append('folderId', selectedFolder);
+          }
+          
+          const response = await fetch('/api/assets/upload', {
+            method: 'POST',
+            body: formData,
+          });
+          
+          const data = await response.json();
+          
+          if (response.ok && data.asset) {
+            // 添加到本地列表
+            const newAsset: Asset = {
+              id: data.asset.id,
+              name: data.asset.name,
+              type: data.asset.type,
+              size: data.asset.size,
+              url: data.asset.url,
+              thumbnail: data.asset.thumbnail || data.asset.url,
+              folder: selectedFolder ? folders.find(f => f.id === selectedFolder)?.name : undefined,
+              tags: data.asset.tags || [],
+              description: data.asset.description,
+              createdAt: new Date(data.asset.createdAt),
+              updatedAt: new Date(data.asset.updatedAt),
+              status: 'active',
+            };
+            setAssets(prev => [newAsset, ...prev]);
+            successCount++;
+          } else {
+            console.error('上传失败:', data.error);
+            failCount++;
+          }
+        } catch (err) {
+          console.error('上传文件失败:', file.name, err);
+          failCount++;
+        }
+      }
       
-      // 添加新素材
-      const newAssets: Asset[] = uploadFiles.map((file, index) => ({
-        id: Date.now().toString() + index,
-        name: file.name,
-        type: file.type.startsWith('image/') ? 'image' :
-              file.type.startsWith('video/') ? 'video' :
-              file.type.startsWith('audio/') ? 'audio' : 'document',
-        size: file.size,
-        url: '#',
-        thumbnail: file.type.startsWith('image/') ? 'https://picsum.photos/seed/' + Date.now() + '/200/150' : undefined,
-        tags: [],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        status: 'active' as AssetStatus,
-      }));
-      
-      setAssets([...newAssets, ...assets]);
       setShowUploadDialog(false);
       setUploadFiles([]);
-      toast.success(`成功上传 ${uploadFiles.length} 个文件`);
+      
+      if (successCount > 0 && failCount === 0) {
+        toast.success(`成功上传 ${successCount} 个文件`);
+      } else if (successCount > 0 && failCount > 0) {
+        toast.warning(`成功上传 ${successCount} 个文件，${failCount} 个失败`);
+      } else {
+        toast.error('上传失败');
+      }
     } catch (error) {
+      console.error('上传失败:', error);
       toast.error('上传失败');
     } finally {
       setUploading(false);
