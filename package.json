@@ -22,10 +22,7 @@
     "directories": {
       "output": "release"
     },
-    "files": [
-      "dist/electron/**/*",
-      "public/**/*"
-    ],
+
     "extraResources": [
       {
         "from": ".next",
