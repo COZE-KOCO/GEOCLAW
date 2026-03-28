@@ -28,8 +28,8 @@ jobs:
       - name: Build Next.js
         run: pnpm build
       
-      - name: Build Electron
-        run: pnpm electron:build
+      - name: Build Electron and Publish
+        run: pnpm electron:build:publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
