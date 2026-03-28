@@ -161,7 +161,12 @@ export async function getCurrentUser(request: Request): Promise<UserSession | nu
   const cookieHeader = request.headers.get('cookie');
   if (cookieHeader) {
     const cookies = cookieHeader.split(';').map(c => c.trim());
-    const userTokenCookie = cookies.find(c => c.startsWith('user_token='));
+    // 优先使用 user_token_electron（Electron 兼容 cookie）
+    let userTokenCookie = cookies.find(c => c.startsWith('user_token_electron='));
+    if (!userTokenCookie) {
+      // 如果没有，尝试 user_token（Web 端 partitioned cookie）
+      userTokenCookie = cookies.find(c => c.startsWith('user_token='));
+    }
     if (userTokenCookie) {
       const token = userTokenCookie.split('=')[1];
       return verifyUserToken(token);

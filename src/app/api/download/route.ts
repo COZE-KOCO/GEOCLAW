@@ -14,13 +14,14 @@ import { NextResponse } from 'next/server';
  */
 
 // 版本号（发布新版本时更新）
-const VERSION = process.env.DESKTOP_VERSION || '0.1.0';
-const RELEASE_DATE = process.env.DESKTOP_RELEASE_DATE || '2025-01-28';
+const VERSION = process.env.DESKTOP_VERSION || '1.0.16';
+const RELEASE_DATE = process.env.DESKTOP_RELEASE_DATE || '2025-03-28';
 
 // 从环境变量读取下载链接（也可直接配置默认值）
+// 注意：Windows 下载链接使用最新版本，环境变量仅作为备用
 const DOWNLOAD_URLS = {
   darwin: process.env.DESKTOP_DOWNLOAD_URL_MAC || null,
-  win32: process.env.DESKTOP_DOWNLOAD_URL_WIN || 'https://github.com/COZE-KOCO/geo-opt/releases/download/v1.0.1/GEO优化工具平台%20Setup%200.1.0.exe',
+  win32: 'https://github.com/COZE-KOCO/GEOCLAW/releases/download/v1.0.16/GEO.Setup.0.1.0.exe',
   linux: process.env.DESKTOP_DOWNLOAD_URL_LINUX || null,
 };
 
@@ -48,10 +49,9 @@ const DOWNLOAD_CONFIG = {
     },
   },
   releaseNotes: [
-    '首次发布',
-    '支持免OAuth配置自动登录',
-    '支持7大平台账号绑定',
-    '本地加密存储账号信息',
+    '修复生产环境 Cookie 兼容性问题',
+    '新增 Electron 专用 Cookie（user_token_electron）',
+    '优化错误处理，避免不必要的错误弹窗',
   ],
 };
 

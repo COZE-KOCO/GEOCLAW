@@ -254,11 +254,31 @@ export class PlatformAuthManager {
     } catch (e: any) {
       this.writeLog(`[Electron] 保存账号失败: ${e.message || e}`);
       
-      // 显示错误弹窗
-      const errorMessage = `保存账号失败！\n\n错误信息: ${e.message || '未知错误'}\n\n平台: ${platform}\nBusinessId: ${this.currentBusinessId}\nAPI地址: ${this.apiBaseUrl}`;
-      dialog.showErrorBox('账号绑定失败', errorMessage);
+      // 认证/权限相关错误不显示弹窗，让页面自然跳转或提示
+      const silentErrors = [
+        '请先登录',
+        '未授权',
+        '认证',
+        '您没有权限',
+        '没有创建企业',
+        '请先创建企业',
+        'HTTP错误: 401',
+        'HTTP错误: 403'
+      ];
       
-      return { success: false, error: e.message || '保存账号失败' };
+      const errorMessage = e.message || '';
+      const shouldSilent = silentErrors.some(err => errorMessage.includes(err));
+      
+      if (shouldSilent) {
+        this.writeLog(`[Electron] 认证/权限相关错误，跳过显示错误弹窗: ${errorMessage}`);
+        return { success: false, error: errorMessage };
+      }
+      
+      // 其他错误才显示弹窗
+      const fullErrorMessage = `保存账号失败！\n\n错误信息: ${errorMessage}\n\n平台: ${platform}\nBusinessId: ${this.currentBusinessId}\nAPI地址: ${this.apiBaseUrl}`;
+      dialog.showErrorBox('账号绑定失败', fullErrorMessage);
+      
+      return { success: false, error: errorMessage || '保存账号失败' };
     }
   }
 
@@ -767,6 +787,44 @@ export class PlatformAuthManager {
   async getSavedAccounts(businessId: string): Promise<Record<string, SavedAccount[]>> {
     console.log(`[Electron] 获取已保存账号, businessId: ${businessId}`);
     
+    // 先检查是否有认证 token
+    try {
+      const mainSession = this.mainWindow.webContents.session;
+      const cookies = await mainSession.cookies.get({});
+      
+      // 详细日志：列出所有 cookie
+      console.log(`[Electron] Session 中的所有 cookie 数量: ${cookies.length}`);
+      cookies.forEach((c, i) => {
+        console.log(`[Electron] Cookie[${i}]: name=${c.name}, domain=${c.domain}, path=${c.path}, secure=${c.secure}, httpOnly=${c.httpOnly}`);
+      });
+      
+      // 优先使用 user_token_electron（非 partitioned，Electron 兼容）
+      // 如果没有，再尝试 user_token（partitioned cookie，可能在 Electron 中无法正确获取）
+      let userToken = cookies.find(c => c.name === 'user_token_electron');
+      if (userToken) {
+        console.log(`[Electron] 使用 user_token_electron cookie`);
+      } else {
+        userToken = cookies.find(c => c.name === 'user_token');
+        if (userToken) {
+          console.log(`[Electron] 使用 user_token cookie（partitioned）`);
+        }
+      }
+      
+      if (!userToken) {
+        console.log(`[Electron] 未找到 user_token cookie，可能原因：`);
+        console.log(`[Electron]   1. 用户未登录`);
+        console.log(`[Electron]   2. Cookie 使用了 partitioned 属性，Electron session 无法获取`);
+        console.log(`[Electron]   3. Cookie 域名不匹配`);
+        // 用户未登录，返回空列表，不显示错误
+        return {};
+      }
+      
+      console.log(`[Electron] 找到 user_token cookie: ${userToken.value.substring(0, 20)}...`);
+    } catch (e) {
+      console.error('[Electron] 检查登录状态失败:', e);
+      return {};
+    }
+    
     try {
       const data = await this.callAPI(`/api/accounts?businessId=${businessId}`, { method: 'GET' });
       console.log(`[Electron] API 返回账号数据:`, data);
@@ -794,8 +852,31 @@ export class PlatformAuthManager {
     } catch (e: any) {
       console.error('[Electron] 获取账号列表失败:', e);
       
-      // 显示错误弹窗
-      dialog.showErrorBox('获取账号列表失败', `错误信息: ${e.message}\nBusinessId: ${businessId}\nAPI地址: ${this.apiBaseUrl}`);
+      // 以下情况不显示错误弹窗，静默返回空列表：
+      // 1. 认证相关错误（401：未登录、token无效等）
+      // 2. 权限相关错误（403：无权访问该商家数据）
+      // 3. 企业相关错误（用户没有创建企业等）
+      const silentErrors = [
+        '请先登录',
+        '未授权',
+        '认证',
+        '您没有权限',
+        '没有创建企业',
+        '请先创建企业',
+        'HTTP错误: 401',
+        'HTTP错误: 403'
+      ];
+      
+      const errorMessage = e.message || '';
+      const shouldSilent = silentErrors.some(err => errorMessage.includes(err));
+      
+      if (shouldSilent) {
+        console.log(`[Electron] 认证/权限相关错误，跳过显示错误弹窗: ${errorMessage}`);
+        return {};
+      }
+      
+      // 其他错误（网络错误、服务器错误等）才显示弹窗
+      dialog.showErrorBox('获取账号列表失败', `错误信息: ${errorMessage}\nBusinessId: ${businessId}\nAPI地址: ${this.apiBaseUrl}`);
       
       return {};
     }
@@ -825,12 +906,22 @@ export class PlatformAuthManager {
     try {
       const mainSession = this.mainWindow.webContents.session;
       const cookies = await mainSession.cookies.get({});
-      const userToken = cookies.find(c => c.name === 'user_token');
+      
+      // 优先使用 user_token_electron（非 partitioned，Electron 兼容）
+      // 如果没有，再尝试 user_token（partitioned cookie，可能在 Electron 中无法正确获取）
+      let userToken = cookies.find(c => c.name === 'user_token_electron');
       if (userToken) {
-        cookieHeader = `user_token=${userToken.value}`;
-        console.log(`[Electron] 已获取认证 cookie: user_token=${userToken.value.substring(0, 20)}...`);
+        cookieHeader = `user_token_electron=${userToken.value}`;
+        console.log(`[Electron] 已获取认证 cookie: user_token_electron=${userToken.value.substring(0, 20)}...`);
       } else {
-        console.log(`[Electron] 警告: 主窗口 session 中未找到 user_token cookie`);
+        userToken = cookies.find(c => c.name === 'user_token');
+        if (userToken) {
+          cookieHeader = `user_token=${userToken.value}`;
+          console.log(`[Electron] 已获取认证 cookie: user_token=${userToken.value.substring(0, 20)}...`);
+        } else {
+          console.log(`[Electron] 警告: 主窗口 session 中未找到 user_token 或 user_token_electron cookie`);
+          console.log(`[Electron] 可用 cookies: ${cookies.map(c => c.name).join(', ')}`);
+        }
       }
     } catch (e) {
       console.error(`[Electron] 获取认证 cookie 失败:`, e);

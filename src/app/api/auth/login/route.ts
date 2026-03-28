@@ -36,11 +36,23 @@ export async function POST(request: NextRequest) {
       user: result.user,
     });
 
+    // 主 cookie：用于 Web 端（支持 iframe 场景）
     response.cookies.set('user_token', token, {
       httpOnly: true,
       secure: true,
       sameSite: 'none',
       partitioned: true, // 允许在 iframe 中设置独立的 Cookie
+      maxAge: 7 * 24 * 60 * 60, // 7天
+      path: '/',
+    });
+
+    // 备用 cookie：用于 Electron 桌面端（不使用 partitioned）
+    // Electron 的 session API 可能无法正确获取 partitioned cookie
+    // 所以额外设置一个非 partitioned 的 cookie 作为备用
+    response.cookies.set('user_token_electron', token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax', // Electron 环境下使用 lax 更安全
       maxAge: 7 * 24 * 60 * 60, // 7天
       path: '/',
     });

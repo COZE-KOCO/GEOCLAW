@@ -1,440 +1,226 @@
 /**
- * 创作计划 API
+ * 查询最近的待执行创作计划 API
+ * 供桌面端调度器智能调度使用
  * 
- * GET  - 获取创作计划列表
- * POST - 创建创作计划
+ * GET - 返回最近一个需要执行的计划及其预计执行时间
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { 
-  type CreationPlan,
-  type CreateCreationPlanInput,
-  type PlanStatus,
-  type PlanFrequency,
-} from '@/lib/creation-plan-store';
-import { 
-  type GenerationConfig, 
-  defaultGenerationConfig,
-  validateGenerationConfig,
-} from '@/lib/types/generation-config';
 
-// 数据库记录转前端类型
-function dbToPlan(record: any): CreationPlan {
-  return {
-    id: record.id,
-    businessId: record.business_id,
-    planName: record.plan_name,
-    status: record.status as PlanStatus,
-    frequency: record.frequency as PlanFrequency,
-    articlesPerRun: record.articles_per_run,
-    scheduledTime: record.scheduled_time || '09:00',
-    scheduledDays: record.scheduled_days || [],
-    scheduledDates: record.scheduled_dates || [],
-    contentConfig: record.content_config as GenerationConfig,
-    publishConfig: record.publish_config,
-    stats: {
-      totalCreated: record.total_created || 0,
-      totalPublished: record.total_published || 0,
-      successRate: parseFloat(record.success_rate) || 0,
-      lastRunAt: record.last_run_at,
-      nextRunAt: record.next_run_at,
-    },
-    startDate: record.start_date,
-    endDate: record.end_date,
-    lastKeywordIndex: record.last_keyword_index || 0,
-    createdAt: record.created_at,
-    updatedAt: record.updated_at,
-  };
-}
-
-// 前端类型转数据库记录
-function planToDb(input: CreateCreationPlanInput): any {
-  return {
-    business_id: input.businessId,
-    plan_name: input.planName,
-    status: 'active',
-    frequency: input.frequency || 'daily',
-    articles_per_run: input.articlesPerRun || 1,
-    scheduled_time: input.scheduledTime || '09:00',
-    scheduled_days: input.scheduledDays || [1, 2, 3, 4, 5],
-    scheduled_dates: input.scheduledDates || [],
-    content_config: input.contentConfig,
-    publish_config: input.publishConfig,
-    total_created: 0,
-    total_published: 0,
-    success_rate: '0',
-    start_date: input.startDate || new Date().toISOString(),
-    end_date: input.endDate,
-    last_keyword_index: input.lastKeywordIndex || 0,
-  };
+/**
+ * 获取中国时区的当前时间
+ */
+function getChinaTime(): Date {
+  const now = new Date();
+  // 转换为中国时区 (UTC+8)
+  const chinaTime = new Date(now.toLocaleString('en-US', { 
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }));
+  return chinaTime;
 }
 
 /**
- * GET /api/creation-plans
- * 获取创作计划列表
- * 
- * Query params:
- * - businessId: 商家ID
- * - status: 状态过滤
- * - id: 获取单个计划
+ * 计算计划的下次执行时间（使用中国时区）
+ * 考虑宽限期：如果计划刚创建（30分钟内）且时间刚过，仍应今天执行
+ */
+function calculateNextExecutionTime(plan: {
+  frequency: string;
+  scheduled_time: string | null;
+  scheduled_days: number[] | null;
+  scheduled_dates: number[] | null;
+  next_run_at: string | null;
+  start_date?: string | null;
+  created_at?: string | null;
+}): Date {
+  const now = new Date();
+  
+  // 如果有 next_run_at 且在未来，直接使用
+  if (plan.next_run_at) {
+    const nextRun = new Date(plan.next_run_at);
+    if (nextRun > now) {
+      return nextRun;
+    }
+  }
+  
+  // 获取中国时区的当前时间信息
+  const chinaTime = getChinaTime();
+  const currentDay = chinaTime.getDay(); // 0-6, 0是周日
+  const currentDate = chinaTime.getDate();
+  
+  // 检查计划是否刚创建（宽限期：30分钟）
+  const createdAt = plan.created_at ? new Date(plan.created_at) : null;
+  const isNewlyCreated = createdAt && (now.getTime() - createdAt.getTime()) < 30 * 60 * 1000;
+  
+  // 根据 frequency 计算下次执行时间
+  const scheduledTime = plan.scheduled_time || '09:00';
+  const [hour, minute] = scheduledTime.split(':').map(Number);
+  
+  // 在中国时区计算今天的执行时间
+  let nextExecution = new Date(chinaTime);
+  nextExecution.setHours(hour, minute, 0, 0);
+  
+  // 检查是否在 scheduled_days 内（对于 daily 类型也要检查）
+  const scheduledDays = plan.scheduled_days || [];
+  const shouldCheckDays = scheduledDays.length > 0;
+  const isTodayValid = !shouldCheckDays || scheduledDays.includes(currentDay);
+  
+  // 检查是否到了执行时间
+  const isTimePassed = nextExecution <= chinaTime;
+  
+  // 宽限期：如果计划刚创建且今天在执行日内且时间已过，仍应今天执行
+  if (isNewlyCreated && isTodayValid && isTimePassed) {
+    console.log(`[EarliestPlan] 计划刚创建，宽限期内仍应今天执行: ${scheduledTime}`);
+    return nextExecution;  // 返回今天的执行时间
+  }
+  
+  // 如果时间已过，或者今天不是执行日，需要找下一个执行时间
+  if (isTimePassed || !isTodayValid) {
+    // 从明天开始找下一个执行日
+    let daysToAdd = 1;
+    
+    if (shouldCheckDays) {
+      // 找到下一个匹配的星期几
+      for (let i = 1; i <= 7; i++) {
+        const checkDay = new Date(chinaTime);
+        checkDay.setDate(checkDay.getDate() + i);
+        if (scheduledDays.includes(checkDay.getDay())) {
+          daysToAdd = i;
+          break;
+        }
+      }
+    }
+    
+    nextExecution.setDate(nextExecution.getDate() + daysToAdd);
+  }
+  
+  // 对于 monthly 类型，需要检查日期
+  if (plan.frequency === 'monthly') {
+    const scheduledDates = plan.scheduled_dates || [];
+    if (scheduledDates.length > 0 && !scheduledDates.includes(currentDate)) {
+      // 找下一个匹配的日期
+      // 简化处理：推到下个月
+      nextExecution.setMonth(nextExecution.getMonth() + 1);
+    }
+  }
+  
+  return nextExecution;
+}
+
+/**
+ * GET /api/creation-plans/earliest
+ * 获取最近一个待执行计划
  */
 export async function GET(request: NextRequest) {
   try {
-    const searchParams = request.nextUrl.searchParams;
-    const businessId = searchParams.get('businessId');
-    const status = searchParams.get('status');
-    const id = searchParams.get('id');
-    
     const supabase = getSupabaseClient();
+    const now = new Date();
     
-    // 获取单个计划
-    if (id) {
-      const { data, error } = await supabase
-        .from('creation_plans')
-        .select('*')
-        .eq('id', id)
-        .single();
-      
-      if (error) {
-        return NextResponse.json(
-          { success: false, error: '计划不存在' },
-          { status: 404 }
-        );
-      }
-      
+    // 获取中国时区信息用于日志
+    const chinaTime = getChinaTime();
+    console.log('[EarliestPlan] 查询时间:', {
+      serverTime: now.toISOString(),
+      chinaTime: chinaTime.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }),
+      chinaDay: chinaTime.getDay(),
+    });
+    
+    // 查询所有活跃且已开始的计划
+    const { data: plans, error } = await supabase
+      .from('creation_plans')
+      .select(`
+        id,
+        plan_name,
+        frequency,
+        scheduled_time,
+        scheduled_days,
+        scheduled_dates,
+        next_run_at,
+        last_run_at,
+        start_date,
+        status,
+        end_date,
+        created_at
+      `)
+      .eq('status', 'active');
+    
+    if (error) {
+      console.error('[EarliestPlan] 查询失败:', error);
+      return NextResponse.json(
+        { success: false, error: '查询失败' },
+        { status: 500 }
+      );
+    }
+    
+    console.log(`[EarliestPlan] 查询到 ${plans?.length || 0} 个活跃计划`);
+    
+    if (!plans || plans.length === 0) {
       return NextResponse.json({ 
         success: true, 
-        data: dbToPlan(data) 
+        plan: null,
+        message: '没有活跃的创作计划' 
       });
     }
     
-    // 获取计划列表
-    let query = supabase
-      .from('creation_plans')
-      .select('*')
-      .order('created_at', { ascending: false });
+    // 过滤已开始且未过期的计划，并计算下次执行时间
+    const candidatePlans = plans
+      .filter(plan => {
+        // 检查是否已开始
+        if (plan.start_date && new Date(plan.start_date) > now) {
+          console.log(`[EarliestPlan] 计划 ${plan.plan_name} 尚未开始: ${plan.start_date}`);
+          return false;
+        }
+        // 过滤已过期的计划
+        if (plan.end_date && new Date(plan.end_date) < now) {
+          console.log(`[EarliestPlan] 计划 ${plan.plan_name} 已过期: ${plan.end_date}`);
+          return false;
+        }
+        return true;
+      })
+      .map(plan => {
+        const nextExecutionTime = calculateNextExecutionTime(plan);
+        console.log(`[EarliestPlan] 计划 ${plan.plan_name} 下次执行: ${nextExecutionTime.toLocaleString('zh-CN')}, scheduledDays: ${JSON.stringify(plan.scheduled_days)}`);
+        return {
+          ...plan,
+          nextExecutionTime,
+        };
+      })
+      .sort((a, b) => a.nextExecutionTime.getTime() - b.nextExecutionTime.getTime());
     
-    if (businessId) {
-      query = query.eq('business_id', businessId);
+    if (candidatePlans.length === 0) {
+      return NextResponse.json({ 
+        success: true, 
+        plan: null,
+        message: '没有待执行的计划' 
+      });
     }
     
-    if (status) {
-      query = query.eq('status', status);
-    }
+    // 返回最近的一个计划
+    const earliest = candidatePlans[0];
     
-    const { data, error } = await query;
+    console.log(`[EarliestPlan] 最早执行计划: ${earliest.plan_name}, 时间: ${earliest.nextExecutionTime.toLocaleString('zh-CN')}`);
     
-    if (error) {
-      console.error('获取创作计划失败:', error);
-      return NextResponse.json(
-        { success: false, error: '获取创作计划失败' },
-        { status: 500 }
-      );
-    }
-    
-    return NextResponse.json({ 
-      success: true, 
-      data: (data || []).map(dbToPlan) 
-    });
-  } catch (error) {
-    console.error('获取创作计划异常:', error);
-    return NextResponse.json(
-      { success: false, error: '服务器错误' },
-      { status: 500 }
-    );
-  }
-}
-
-/**
- * POST /api/creation-plans
- * 创建创作计划
- * 
- * Body: CreateCreationPlanInput
- */
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    console.log('[CreationPlans] 创建计划请求:', {
-      businessId: body.businessId,
-      planName: body.planName,
-      frequency: body.frequency,
-    });
-    
-    // 验证必填字段
-    if (!body.businessId) {
-      console.error('[CreationPlans] 缺少商家ID');
-      return NextResponse.json(
-        { success: false, error: '缺少商家ID' },
-        { status: 400 }
-      );
-    }
-    
-    if (!body.planName) {
-      console.error('[CreationPlans] 缺少计划名称');
-      return NextResponse.json(
-        { success: false, error: '缺少计划名称' },
-        { status: 400 }
-      );
-    }
-    
-    // 验证内容配置（非严格模式，允许创建后配置）
-    const contentConfig: GenerationConfig = {
-      ...defaultGenerationConfig,
-      ...body.contentConfig,
-    };
-    
-    const validation = validateGenerationConfig(contentConfig, false);
-    
-    // 只有在严格错误时才阻止创建
-    if (!validation.valid) {
-      console.error('[CreationPlans] 配置验证失败:', validation.errors);
-      return NextResponse.json(
-        { success: false, error: validation.errors.join('; ') },
-        { status: 400 }
-      );
-    }
-    
-    // 如果有警告，记录日志但不阻止创建
-    if (validation.warnings.length > 0) {
-      console.log('[CreationPlans] 配置警告:', validation.warnings);
-    }
-    
-    // 构建输入
-    const input: CreateCreationPlanInput = {
-      businessId: body.businessId,
-      planName: body.planName,
-      frequency: body.frequency,
-      articlesPerRun: body.articlesPerRun,
-      scheduledTime: body.scheduledTime,
-      scheduledDays: body.scheduledDays,
-      scheduledDates: body.scheduledDates,
-      contentConfig,
-      publishConfig: body.publishConfig || {
-        autoPublish: false,
-        publishDelay: 5,
-        targetPlatforms: [],
-        publishStrategy: 'immediate',
-        publishTimeSlots: [],
+    return NextResponse.json({
+      success: true,
+      plan: {
+        id: earliest.id,
+        planName: earliest.plan_name,
+        frequency: earliest.frequency,
+        scheduledTime: earliest.scheduled_time,
+        scheduledDays: earliest.scheduled_days,
+        nextExecutionTime: earliest.nextExecutionTime.toISOString(),
+        nextRunAt: earliest.next_run_at,
       },
-      startDate: body.startDate,
-      endDate: body.endDate,
-    };
-    
-    const supabase = getSupabaseClient();
-    const dbRecord = planToDb(input);
-    console.log('[CreationPlans] 准备插入数据库:', {
-      business_id: dbRecord.business_id,
-      plan_name: dbRecord.plan_name,
-    });
-    
-    // 插入数据库
-    let insertResult = await supabase
-      .from('creation_plans')
-      .insert(dbRecord)
-      .select()
-      .single();
-    
-    let data = insertResult.data;
-    let error = insertResult.error;
-    
-    // 如果插入失败，尝试不带 last_keyword_index 字段重试
-    // 这是为了兼容数据库中没有该字段的情况
-    if (error) {
-      console.error('[CreationPlans] 首次插入失败:', {
-        message: error.message,
-        code: error.code,
-        details: error.details,
-        hint: error.hint,
-      });
-      
-      const { last_keyword_index, ...dbRecordWithoutKeywordIndex } = dbRecord;
-      console.log('[CreationPlans] 尝试不带 last_keyword_index 重试...');
-      
-      const retryResult = await supabase
-        .from('creation_plans')
-        .insert(dbRecordWithoutKeywordIndex)
-        .select()
-        .single();
-      
-      if (!retryResult.error) {
-        data = retryResult.data;
-        error = null;
-        console.log('[CreationPlans] 重试成功，已跳过 last_keyword_index 字段');
-      } else {
-        console.error('[CreationPlans] 重试也失败:', {
-          message: retryResult.error.message,
-          code: retryResult.error.code,
-          details: retryResult.error.details,
-          hint: retryResult.error.hint,
-        });
-      }
-    }
-    
-    if (error) {
-      console.error('[CreationPlans] 创建计划最终失败:', error);
-      return NextResponse.json(
-        { success: false, error: `创建失败: ${error.message || '数据库错误'}` },
-        { status: 500 }
-      );
-    }
-    
-    console.log('[CreationPlans] 计划创建成功:', data?.id);
-    
-    return NextResponse.json({ 
-      success: true, 
-      data: dbToPlan(data),
-      warnings: validation.warnings.length > 0 ? validation.warnings : undefined,
+      totalPending: candidatePlans.length,
     });
   } catch (error) {
-    console.error('[CreationPlans] 创建计划异常:', error);
-    return NextResponse.json(
-      { success: false, error: `服务器错误: ${error instanceof Error ? error.message : '未知错误'}` },
-      { status: 500 }
-    );
-  }
-}
-
-/**
- * PATCH /api/creation-plans
- * 更新创作计划
- * 
- * Body: { id: string, ...updates }
- */
-export async function PATCH(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { id, ...updates } = body;
-    
-    if (!id) {
-      return NextResponse.json(
-        { success: false, error: '缺少计划ID' },
-        { status: 400 }
-      );
-    }
-    
-    const supabase = getSupabaseClient();
-    
-    // 构建更新对象
-    const dbUpdates: any = {
-      updated_at: new Date().toISOString(),
-    };
-    
-    if (updates.planName) dbUpdates.plan_name = updates.planName;
-    if (updates.status) dbUpdates.status = updates.status;
-    if (updates.frequency) dbUpdates.frequency = updates.frequency;
-    if (updates.articlesPerRun !== undefined) dbUpdates.articles_per_run = updates.articlesPerRun;
-    if (updates.scheduledTime) dbUpdates.scheduled_time = updates.scheduledTime;
-    if (updates.scheduledDays) dbUpdates.scheduled_days = updates.scheduledDays;
-    if (updates.scheduledDates) dbUpdates.scheduled_dates = updates.scheduledDates;
-    if (updates.contentConfig) dbUpdates.content_config = updates.contentConfig;
-    if (updates.publishConfig) dbUpdates.publish_config = updates.publishConfig;
-    if (updates.endDate !== undefined) dbUpdates.end_date = updates.endDate;
-    if (updates.lastKeywordIndex !== undefined) dbUpdates.last_keyword_index = updates.lastKeywordIndex;
-    
-    let updateResult = await supabase
-      .from('creation_plans')
-      .update(dbUpdates)
-      .eq('id', id)
-      .select()
-      .single();
-    
-    let data = updateResult.data;
-    let error = updateResult.error;
-    
-    // 如果更新失败且包含 last_keyword_index，尝试不带该字段重试
-    // 这是为了兼容数据库中没有该字段的情况
-    if (error && 'last_keyword_index' in dbUpdates) {
-      const { last_keyword_index, ...dbUpdatesWithoutKeywordIndex } = dbUpdates;
-      const retryResult = await supabase
-        .from('creation_plans')
-        .update(dbUpdatesWithoutKeywordIndex)
-        .eq('id', id)
-        .select()
-        .single();
-      
-      if (!retryResult.error) {
-        data = retryResult.data;
-        error = null;
-        console.warn('last_keyword_index 字段不存在，已跳过该字段的更新');
-      }
-    }
-    
-    if (error) {
-      console.error('更新创作计划失败:', error);
-      return NextResponse.json(
-        { success: false, error: '更新创作计划失败' },
-        { status: 500 }
-      );
-    }
-    
-    return NextResponse.json({ 
-      success: true, 
-      data: dbToPlan(data) 
-    });
-  } catch (error) {
-    console.error('更新创作计划异常:', error);
-    return NextResponse.json(
-      { success: false, error: '服务器错误' },
-      { status: 500 }
-    );
-  }
-}
-
-/**
- * DELETE /api/creation-plans
- * 删除创作计划
- * 
- * Query params:
- * - id: 计划ID
- */
-export async function DELETE(request: NextRequest) {
-  try {
-    const id = request.nextUrl.searchParams.get('id');
-    
-    if (!id) {
-      return NextResponse.json(
-        { success: false, error: '缺少计划ID' },
-        { status: 400 }
-      );
-    }
-    
-    const supabase = getSupabaseClient();
-    
-    // 先删除关联的创作任务
-    await supabase
-      .from('creation_tasks')
-      .delete()
-      .eq('plan_id', id);
-    
-    // 删除关联的发布任务
-    const { error: publishTaskError } = await supabase
-      .from('publish_tasks')
-      .delete()
-      .eq('plan_id', id);
-    
-    if (publishTaskError) {
-      console.warn('删除关联发布任务失败:', publishTaskError);
-      // 不阻断删除计划的主流程
-    }
-    
-    // 再删除计划
-    const { error } = await supabase
-      .from('creation_plans')
-      .delete()
-      .eq('id', id);
-    
-    if (error) {
-      console.error('删除创作计划失败:', error);
-      return NextResponse.json(
-        { success: false, error: '删除创作计划失败' },
-        { status: 500 }
-      );
-    }
-    
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('删除创作计划异常:', error);
+    console.error('[EarliestPlan] 查询异常:', error);
     return NextResponse.json(
       { success: false, error: '服务器错误' },
       { status: 500 }

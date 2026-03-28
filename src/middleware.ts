@@ -22,6 +22,8 @@ const STATIC_EXTENSIONS = [
   '.woff2',
   '.ttf',
   '.eot',
+  '.gz',
+  '.zip',
 ];
 
 export function middleware(request: NextRequest) {

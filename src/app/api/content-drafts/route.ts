@@ -1,117 +1,20 @@
+/**
+ * 同步草稿发布状态 API
+ * 用于修复历史数据：将已成功发布的草稿状态更新为 published
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  getContentDraftsByBusiness,
-  getContentDraftById,
-  createContentDraft,
-  updateContentDraft,
-  deleteContentDraft,
-  getContentDraftStats,
-  type CreateContentDraftInput,
-  type UpdateContentDraftInput,
-} from '@/lib/content-draft-store';
-import { getCurrentUser, validateBusinessOwnership } from '@/lib/user-auth';
-import { getBusinessesByOwner } from '@/lib/business-store';
+import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getCurrentUser } from '@/lib/user-auth';
 
 /**
- * 获取用户的商家ID（支持前端传递或使用默认）
- */
-async function resolveBusinessId(
-  userId: string, 
-  requestBusinessId?: string | null
-): Promise<{ businessId: string } | { needsCreateBusiness: true }> {
-  if (requestBusinessId) {
-    // 前端传递了 businessId，验证用户是否拥有该商家
-    const hasAccess = await validateBusinessOwnership(userId, requestBusinessId);
-    if (!hasAccess) {
-      return { needsCreateBusiness: true };
-    }
-    return { businessId: requestBusinessId };
-  }
-  
-  // 没有传递 businessId，获取用户的第一个商家
-  const businesses = await getBusinessesByOwner(userId);
-  if (businesses.length === 0) {
-    return { needsCreateBusiness: true };
-  }
-  return { businessId: businesses[0].id };
-}
-
-/**
- * GET /api/content-drafts
- * 获取文章列表或单篇文章
- * 注意：用户只能获取自己所属企业的文章
- * Query params:
- * - id: 文章ID（可选，获取单篇）
- * - status: 状态筛选 (draft | ready | published)
- * - stats: 是否获取统计信息
- */
-export async function GET(request: NextRequest) {
-  try {
-    const user = await getCurrentUser(request);
-    
-    if (!user) {
-      return NextResponse.json({ error: '请先登录' }, { status: 401 });
-    }
-
-    const { searchParams } = new URL(request.url);
-    const id = searchParams.get('id');
-    const getStats = searchParams.get('stats') === 'true';
-    const requestBusinessId = searchParams.get('businessId');
-
-    // 获取单篇文章
-    if (id) {
-      const draft = await getContentDraftById(id);
-      if (!draft) {
-        return NextResponse.json({ error: '文章不存在' }, { status: 404 });
-      }
-      // 验证文章是否属于用户的企业
-      const hasAccess = await validateBusinessOwnership(user.id, draft.businessId);
-      if (!hasAccess) {
-        return NextResponse.json({ error: '您没有权限访问该文章' }, { status: 403 });
-      }
-      return NextResponse.json({ draft });
-    }
-
-    // 获取用户的商家ID
-    const result = await resolveBusinessId(user.id, requestBusinessId);
-    
-    // 如果用户没有企业，返回空数据
-    if ('needsCreateBusiness' in result) {
-      if (getStats) {
-        return NextResponse.json({ 
-          stats: { total: 0, draft: 0, ready: 0, published: 0 },
-          needsCreateBusiness: true 
-        });
-      }
-      return NextResponse.json({ 
-        drafts: [],
-        needsCreateBusiness: true 
-      });
-    }
-
-    // 获取统计信息
-    if (getStats) {
-      const stats = await getContentDraftStats(result.businessId);
-      return NextResponse.json({ stats });
-    }
-
-    // 获取文章列表 - 只返回用户企业的文章
-    const options = {
-      status: searchParams.get('status') || undefined,
-      limit: searchParams.get('limit') ? parseInt(searchParams.get('limit')!) : undefined,
-    };
-
-    const drafts = await getContentDraftsByBusiness(result.businessId, options);
-    return NextResponse.json({ drafts });
-  } catch (error) {
-    console.error('获取文章数据失败:', error);
-    return NextResponse.json({ error: '获取文章数据失败' }, { status: 500 });
-  }
-}
-
-/**
- * POST /api/content-drafts
- * 创建文章 - 只能为用户自己的企业创建
+ * POST /api/content-drafts/sync-published-status
+ * 同步草稿的发布状态
+ * 
+ * 逻辑：
+ * 1. 查询所有 status != 'published' 的草稿
+ * 2. 检查是否有对应的 publish_records 且 status = 'success'
+ * 3. 如果有，更新草稿状态为 'published'
  */
 export async function POST(request: NextRequest) {
   try {
@@ -121,127 +24,97 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '请先登录' }, { status: 401 });
     }
 
-    const body = await request.json();
-
-    // 获取用户的商家ID
-    const result = await resolveBusinessId(user.id, body.businessId);
+    const supabase = getSupabaseClient();
+    const { searchParams } = new URL(request.url);
+    const businessId = searchParams.get('businessId');
     
-    // 如果用户没有企业，返回错误提示
-    if ('needsCreateBusiness' in result) {
+    if (!businessId) {
+      return NextResponse.json({ error: '缺少 businessId 参数' }, { status: 400 });
+    }
+
+    console.log(`[SyncPublishedStatus] 开始同步商家 ${businessId} 的草稿发布状态...`);
+
+    // 1. 获取该商家所有未标记为已发布的草稿
+    const { data: drafts, error: draftsError } = await supabase
+      .from('content_drafts')
+      .select('id, title, status')
+      .eq('business_id', businessId)
+      .neq('status', 'published');
+
+    if (draftsError) {
+      console.error('[SyncPublishedStatus] 查询草稿失败:', draftsError);
+      return NextResponse.json({ error: '查询草稿失败' }, { status: 500 });
+    }
+
+    if (!drafts || drafts.length === 0) {
       return NextResponse.json({ 
-        error: '请先创建企业',
-        needsCreateBusiness: true 
+        success: true, 
+        message: '没有需要同步的草稿',
+        updated: 0 
       });
     }
+
+    console.log(`[SyncPublishedStatus] 找到 ${drafts.length} 个未标记为已发布的草稿`);
+
+    // 2. 获取这些草稿对应的发布记录
+    const draftIds = drafts.map(d => d.id);
+    const { data: publishRecords, error: recordsError } = await supabase
+      .from('publish_records')
+      .select('draft_id, status')
+      .in('draft_id', draftIds)
+      .eq('status', 'success');
+
+    if (recordsError) {
+      console.error('[SyncPublishedStatus] 查询发布记录失败:', recordsError);
+      return NextResponse.json({ error: '查询发布记录失败' }, { status: 500 });
+    }
+
+    if (!publishRecords || publishRecords.length === 0) {
+      return NextResponse.json({ 
+        success: true, 
+        message: '没有已成功发布的草稿需要更新',
+        updated: 0 
+      });
+    }
+
+    // 3. 找出需要更新的草稿 ID（有成功发布记录但状态未更新）
+    const successfulDraftIds = [...new Set(publishRecords.map(r => r.draft_id))];
     
-    const input: CreateContentDraftInput = {
-      businessId: result.businessId,
-      title: body.title,
-      content: body.content,
-      distillationWords: body.distillationWords,
-      outline: body.outline,
-      seoScore: body.seoScore,
-      targetModel: body.targetModel,
-      articleType: body.articleType,
-      status: body.status,
-    };
+    console.log(`[SyncPublishedStatus] 找到 ${successfulDraftIds.length} 个已成功发布但状态未更新的草稿`);
 
-    const draft = await createContentDraft(input);
-    if (!draft) {
-      return NextResponse.json({ error: '创建文章失败' }, { status: 500 });
+    if (successfulDraftIds.length === 0) {
+      return NextResponse.json({ 
+        success: true, 
+        message: '没有需要更新的草稿',
+        updated: 0 
+      });
     }
-    return NextResponse.json({ draft }, { status: 201 });
+
+    // 4. 批量更新草稿状态
+    const { error: updateError } = await supabase
+      .from('content_drafts')
+      .update({
+        status: 'published',
+        published_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .in('id', successfulDraftIds);
+
+    if (updateError) {
+      console.error('[SyncPublishedStatus] 更新草稿状态失败:', updateError);
+      return NextResponse.json({ error: '更新草稿状态失败' }, { status: 500 });
+    }
+
+    console.log(`[SyncPublishedStatus] ✅ 成功更新 ${successfulDraftIds.length} 个草稿的发布状态`);
+
+    return NextResponse.json({
+      success: true,
+      message: `成功同步 ${successfulDraftIds.length} 个草稿的发布状态`,
+      updated: successfulDraftIds.length,
+      draftIds: successfulDraftIds,
+    });
   } catch (error) {
-    console.error('创建文章失败:', error);
-    return NextResponse.json({ error: '创建文章失败' }, { status: 500 });
-  }
-}
-
-/**
- * PUT /api/content-drafts
- * 更新文章 - 只能更新自己企业的文章
- */
-export async function PUT(request: NextRequest) {
-  try {
-    const user = await getCurrentUser(request);
-    
-    if (!user) {
-      return NextResponse.json({ error: '请先登录' }, { status: 401 });
-    }
-
-    const body = await request.json();
-    const { id, ...data } = body;
-
-    if (!id) {
-      return NextResponse.json({ error: '缺少文章ID' }, { status: 400 });
-    }
-
-    // 验证文章是否属于用户的企业
-    const existingDraft = await getContentDraftById(id);
-    if (!existingDraft) {
-      return NextResponse.json({ error: '文章不存在' }, { status: 404 });
-    }
-    if (existingDraft.businessId !== user.businessId) {
-      return NextResponse.json({ error: '您没有权限修改该文章' }, { status: 403 });
-    }
-
-    const input: UpdateContentDraftInput = {
-      title: data.title,
-      content: data.content,
-      distillationWords: data.distillationWords,
-      outline: data.outline,
-      seoScore: data.seoScore,
-      targetModel: data.targetModel,
-      articleType: data.articleType,
-      status: data.status,
-    };
-
-    const draft = await updateContentDraft(id, input);
-    if (!draft) {
-      return NextResponse.json({ error: '更新文章失败' }, { status: 500 });
-    }
-    return NextResponse.json({ draft });
-  } catch (error) {
-    console.error('更新文章失败:', error);
-    return NextResponse.json({ error: '更新文章失败' }, { status: 500 });
-  }
-}
-
-/**
- * DELETE /api/content-drafts
- * 删除文章 - 只能删除自己企业的文章
- */
-export async function DELETE(request: NextRequest) {
-  try {
-    const user = await getCurrentUser(request);
-    
-    if (!user) {
-      return NextResponse.json({ error: '请先登录' }, { status: 401 });
-    }
-
-    const { searchParams } = new URL(request.url);
-    const id = searchParams.get('id');
-
-    if (!id) {
-      return NextResponse.json({ error: '缺少文章ID' }, { status: 400 });
-    }
-
-    // 验证文章是否属于用户的企业
-    const existingDraft = await getContentDraftById(id);
-    if (!existingDraft) {
-      return NextResponse.json({ error: '文章不存在' }, { status: 404 });
-    }
-    if (existingDraft.businessId !== user.businessId) {
-      return NextResponse.json({ error: '您没有权限删除该文章' }, { status: 403 });
-    }
-
-    const success = await deleteContentDraft(id);
-    if (!success) {
-      return NextResponse.json({ error: '删除文章失败' }, { status: 500 });
-    }
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('删除文章失败:', error);
-    return NextResponse.json({ error: '删除文章失败' }, { status: 500 });
+    console.error('[SyncPublishedStatus] 同步失败:', error);
+    return NextResponse.json({ error: '服务器错误' }, { status: 500 });
   }
 }

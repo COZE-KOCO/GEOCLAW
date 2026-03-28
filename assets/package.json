@@ -1,8 +1,8 @@
 {
   "name": "geo-optimizer",
-  "version": "1.0.16",
+  "version": "0.1.0",
   "private": true,
-  "main": "dist/electron/electron/main.js",
+  "main": "dist/electron/main.js",
   "scripts": {
     "build": "bash ./scripts/build.sh",
     "dev": "bash ./scripts/dev.sh",
@@ -23,51 +23,45 @@
       "output": "release"
     },
     "files": [
-      "package.json",
       "dist/electron/**/*",
-      "public/**/*"
+      "public/**/*",
+      "package.json"
     ],
     "extraResources": [
       {
         "from": ".next",
         "to": "server/.next",
-        "filter": [
-          "**/*"
-        ]
+        "filter": ["**/*"]
       },
       {
         "from": "public",
         "to": "server/public",
-        "filter": [
-          "**/*"
-        ]
+        "filter": ["**/*"]
+      },
+      {
+        "from": "package.json",
+        "to": "server/package.json"
       },
       {
         "from": "node_modules/next",
         "to": "server/node_modules/next",
-        "filter": [
-          "**/*"
-        ]
+        "filter": ["**/*"]
       },
       {
         "from": "node_modules/react",
         "to": "server/node_modules/react",
-        "filter": [
-          "**/*"
-        ]
+        "filter": ["**/*"]
       },
       {
         "from": "node_modules/react-dom",
         "to": "server/node_modules/react-dom",
-        "filter": [
-          "**/*"
-        ]
+        "filter": ["**/*"]
       }
     ],
     "publish": {
       "provider": "github",
       "owner": "COZE-KOCO",
-      "repo": "GEOCLAW"
+      "repo": "geo-opt"
     },
     "mac": {
       "category": "public.app-category.productivity",
@@ -128,9 +122,6 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.958.0",
     "@aws-sdk/lib-storage": "^3.958.0",
-    "@dnd-kit/core": "^6.3.1",
-    "@dnd-kit/sortable": "^10.0.0",
-    "@dnd-kit/utilities": "^3.2.2",
     "@hookform/resolvers": "^5.2.2",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.15",
@@ -172,7 +163,6 @@
     "electron-updater": "^6.8.3",
     "embla-carousel-react": "^8.6.0",
     "input-otp": "^1.4.2",
-    "jose": "^6.2.2",
     "lucide-react": "^0.468.0",
     "next": "16.1.1",
     "next-themes": "^0.4.6",
