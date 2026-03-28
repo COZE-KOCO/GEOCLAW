@@ -209,15 +209,32 @@ export class PlatformAuthManager {
         },
       });
 
-      this.writeLog(`[Electron] 准备使用桌面端专用 API`);
+      this.writeLog(`[Electron] 准备调用 API 保存账号`);
       this.writeLog(`[Electron] API地址: ${this.apiBaseUrl}`);
       this.writeLog(`[Electron] 请求体: ${requestBody}`);
 
-      // 使用桌面端专用 API，不需要认证
-      const response = await this.callAPI('/api/accounts', {
-        method: 'POST',
-        body: requestBody,
-      });
+      // 调用 API 保存账号（需要认证）
+      let response;
+      try {
+        response = await this.callAPI('/api/accounts', {
+          method: 'POST',
+          body: requestBody,
+        });
+        this.writeLog(`[Electron] API 调用成功`);
+      } catch (apiError: any) {
+        this.writeLog(`[Electron] API 调用失败: ${apiError.message}`);
+        // 如果是认证错误，给用户明确提示
+        if (apiError.message.includes('请先登录') || 
+            apiError.message.includes('HTTP错误: 401') ||
+            apiError.message.includes('未授权')) {
+          return { 
+            success: false, 
+            error: '登录状态已过期，请刷新页面后重新登录' 
+          };
+        }
+        throw apiError;
+      }
+      
       const account = response.account;  // API 返回 { account: {...} }
       
       this.writeLog(`[Electron] 账号保存成功: ${JSON.stringify(account)}`);
@@ -614,7 +631,13 @@ export class PlatformAuthManager {
               try {
                 const result = await window.loginAPI.confirmLogin('${platform}');
                 console.log('确认登录结果:', result);
-                if (!result.success) {
+                if (result.success) {
+                  // 成功：显示成功提示，窗口会被主进程关闭
+                  this.textContent = '绑定成功！';
+                  this.style.background = '#22c55e';
+                  // 不需要手动关闭窗口，主进程会处理
+                } else {
+                  // 失败：显示错误并恢复按钮
                   this.textContent = result.error || '验证失败';
                   this.style.background = '#ef4444';
                   setTimeout(() => {

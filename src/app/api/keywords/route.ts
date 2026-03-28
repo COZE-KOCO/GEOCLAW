@@ -1,145 +1,268 @@
-/**
- * 关键词蒸馏词提取API
- * 输入主题/关键词，自动提取蒸馏词
- */
-
 import { NextRequest, NextResponse } from 'next/server';
-import { LLMClient, Config } from 'coze-coding-dev-sdk';
+import {
+  getKeywordLibrariesByBusiness,
+  getKeywordLibraryById,
+  createKeywordLibrary,
+  updateKeywordLibrary,
+  deleteKeywordLibrary,
+  addKeywordsToLibrary,
+  removeKeywordFromLibrary,
+  getKeywordLibraryStats,
+  type CreateKeywordLibraryInput,
+  type UpdateKeywordLibraryInput,
+} from '@/lib/keyword-store';
+import { getCurrentUser, validateBusinessOwnership } from '@/lib/user-auth';
+import { getBusinessesByOwner } from '@/lib/business-store';
 
-export interface DistillationKeyword {
-  word: string;
-  category: 'core' | 'longtail' | 'question' | 'brand';
-  importance: number;
-  reasoning: string;
-}
-
-export interface DistillationExtractResult {
-  keywords: DistillationKeyword[];
-  coreMessage: string;
-  userIntent: string;
-  competitorGaps: string[];
+/**
+ * 获取用户的默认企业ID
+ */
+async function getUserBusinessId(userId: string): Promise<{ businessId: string } | { needsCreateBusiness: true }> {
+  const businesses = await getBusinessesByOwner(userId);
+  if (businesses.length === 0) {
+    return { needsCreateBusiness: true };
+  }
+  return { businessId: businesses[0].id };
 }
 
 /**
- * POST /api/keywords/distill
- * 提取蒸馏词
- * 
- * Body: { topic: string, seedKeywords?: string[] }
+ * GET /api/keywords
+ * 获取关键词库列表或单个关键词库
+ * 注意：用户只能获取自己所属企业的关键词库
+ */
+export async function GET(request: NextRequest) {
+  try {
+    const user = await getCurrentUser(request);
+    
+    if (!user) {
+      return NextResponse.json({ error: '请先登录' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+    const businessId = searchParams.get('businessId');
+    const getStats = searchParams.get('stats') === 'true';
+
+    // 获取单个关键词库
+    if (id) {
+      const library = await getKeywordLibraryById(id);
+      if (!library) {
+        return NextResponse.json({ error: '关键词库不存在' }, { status: 404 });
+      }
+      // 验证关键词库是否属于用户的企业
+      const hasAccess = await validateBusinessOwnership(user.id, library.businessId);
+      if (!hasAccess) {
+        return NextResponse.json({ error: '您没有权限访问该关键词库' }, { status: 403 });
+      }
+      return NextResponse.json({ library });
+    }
+
+    // 验证并获取用户的企业ID
+    let targetBusinessId: string | null = null;
+    
+    if (businessId) {
+      // 前端传递了 businessId，验证用户是否拥有该商家
+      const hasAccess = await validateBusinessOwnership(user.id, businessId);
+      if (!hasAccess) {
+        // 返回空数据而不是错误
+        return NextResponse.json({ 
+          libraries: [],
+          needsCreateBusiness: true 
+        });
+      }
+      targetBusinessId = businessId;
+    } else {
+      // 没有传递 businessId，获取用户的第一个商家
+      const result = await getUserBusinessId(user.id);
+      if ('needsCreateBusiness' in result) {
+        // 返回空数据而不是错误
+        if (getStats) {
+          return NextResponse.json({ 
+            stats: { total: 0, totalKeywords: 0 },
+            needsCreateBusiness: true 
+          });
+        }
+        return NextResponse.json({ 
+          libraries: [],
+          needsCreateBusiness: true 
+        });
+      }
+      targetBusinessId = result.businessId;
+    }
+
+    // 获取统计信息
+    if (getStats) {
+      const stats = await getKeywordLibraryStats(targetBusinessId);
+      return NextResponse.json({ stats });
+    }
+
+    // 获取关键词库列表
+    const libraries = await getKeywordLibrariesByBusiness(targetBusinessId);
+    return NextResponse.json({ libraries });
+  } catch (error) {
+    console.error('获取关键词库数据失败:', error);
+    return NextResponse.json({ error: '获取关键词库数据失败' }, { status: 500 });
+  }
+}
+
+/**
+ * POST /api/keywords
+ * 创建关键词库 - 只能为用户自己的企业创建
  */
 export async function POST(request: NextRequest) {
   try {
+    const user = await getCurrentUser(request);
+    
+    if (!user) {
+      return NextResponse.json({ error: '请先登录' }, { status: 401 });
+    }
+
     const body = await request.json();
-    const { topic, seedKeywords } = body;
-
-    if (!topic) {
-      return NextResponse.json(
-        { success: false, error: '请输入主题或关键词' },
-        { status: 400 }
-      );
-    }
-
-    const config = new Config();
-    const client = new LLMClient(config);
-
-    const systemPrompt = `你是一个专业的GEO（生成引擎优化）关键词分析师。
-你需要分析用户输入的主题或关键词，提取出蒸馏词（Distillation Words）。
-
-蒸馏词分类：
-1. **核心词（core）**：直接表达主题的关键词，搜索量高，竞争激烈
-   - 例：SEO优化、内容营销、人工智能
-
-2. **长尾词（longtail）**：更具体、更精准的关键词组合，搜索量低但转化率高
-   - 例：如何进行SEO优化、中小企业内容营销策略
-
-3. **问题词（question）**：用户真实搜索的问题形式关键词
-   - 例：SEO优化怎么做、人工智能哪个好
-
-4. **品牌词（brand）**：涉及品牌、产品、公司的关键词
-   - 例：ChatGPT、文心一言、讯飞星火
-
-提取原则：
-- 每个类别提取3-8个关键词
-- 关键词要有商业价值和搜索价值
-- 避免重复或过于相似的关键词
-- 考虑用户搜索意图和内容创作价值
-
-返回JSON格式：
-{
-  "keywords": [
-    {
-      "word": "关键词",
-      "category": "core|longtail|question|brand",
-      "importance": 1-10,
-      "reasoning": "为什么这个词重要"
-    }
-  ],
-  "coreMessage": "核心信息总结（一句话）",
-  "userIntent": "用户搜索意图分析",
-  "competitorGaps": ["竞争对手空白点1", "空白点2"]
-}`;
-
-    const userMessage = `请分析以下主题并提取蒸馏词：
-
-主题：${topic}
-
-${seedKeywords?.length ? `已有种子关键词：${seedKeywords.join('、')}` : ''}
-
-请提取各类别的关键词，并分析用户意图和竞争机会。`;
-
-    const response = await client.invoke([
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userMessage },
-    ], { temperature: 0.7 });
-
-    // 解析响应
-    let result: DistillationExtractResult;
-    try {
-      let content = response.content.trim();
-      
-      // 清理markdown代码块
-      if (content.startsWith('```json')) {
-        content = content.slice(7);
-      } else if (content.startsWith('```')) {
-        content = content.slice(3);
+    
+    // 验证并获取用户的企业ID
+    let targetBusinessId: string;
+    
+    if (body.businessId) {
+      // 前端传递了 businessId，验证用户是否拥有该商家
+      const hasAccess = await validateBusinessOwnership(user.id, body.businessId);
+      if (!hasAccess) {
+        return NextResponse.json({ 
+          error: '请先创建企业',
+          needsCreateBusiness: true 
+        });
       }
-      if (content.endsWith('```')) {
-        content = content.slice(0, -3);
+      targetBusinessId = body.businessId;
+    } else {
+      // 没有传递 businessId，获取用户的第一个商家
+      const result = await getUserBusinessId(user.id);
+      if ('needsCreateBusiness' in result) {
+        return NextResponse.json({ 
+          error: '请先创建企业',
+          needsCreateBusiness: true 
+        });
       }
-      content = content.trim();
-
-      // 提取JSON对象
-      const jsonStart = content.indexOf('{');
-      const jsonEnd = content.lastIndexOf('}');
-      if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
-        content = content.slice(jsonStart, jsonEnd + 1);
-      }
-
-      result = JSON.parse(content);
-    } catch (parseError) {
-      console.error('[Distillation] JSON解析失败:', parseError);
-      return NextResponse.json(
-        { success: false, error: '蒸馏词提取失败，请重试' },
-        { status: 500 }
-      );
+      targetBusinessId = result.businessId;
     }
 
-    // 验证结果格式
-    if (!result.keywords || !Array.isArray(result.keywords)) {
-      return NextResponse.json(
-        { success: false, error: '蒸馏词格式错误，请重试' },
-        { status: 500 }
-      );
-    }
+    const input: CreateKeywordLibraryInput = {
+      businessId: targetBusinessId,
+      name: body.name,
+      description: body.description,
+      keywords: body.keywords,
+    };
 
-    return NextResponse.json({
-      success: true,
-      data: result,
-    });
+    const library = await createKeywordLibrary(input);
+    if (!library) {
+      return NextResponse.json({ error: '创建关键词库失败' }, { status: 500 });
+    }
+    return NextResponse.json({ library }, { status: 201 });
   } catch (error) {
-    console.error('[Distillation API] Error:', error);
-    return NextResponse.json(
-      { success: false, error: '蒸馏词提取失败' },
-      { status: 500 }
-    );
+    console.error('创建关键词库失败:', error);
+    return NextResponse.json({ error: '创建关键词库失败' }, { status: 500 });
+  }
+}
+
+/**
+ * PUT /api/keywords
+ * 更新关键词库 - 只能更新自己企业的关键词库
+ */
+export async function PUT(request: NextRequest) {
+  try {
+    const user = await getCurrentUser(request);
+    
+    if (!user) {
+      return NextResponse.json({ error: '请先登录' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { id, action, keyword, keywords, ...data } = body;
+
+    if (!id) {
+      return NextResponse.json({ error: '缺少关键词库ID' }, { status: 400 });
+    }
+
+    // 验证关键词库是否属于用户的企业
+    const existingLibrary = await getKeywordLibraryById(id);
+    if (!existingLibrary) {
+      return NextResponse.json({ error: '关键词库不存在' }, { status: 404 });
+    }
+    const hasAccess = await validateBusinessOwnership(user.id, existingLibrary.businessId);
+    if (!hasAccess) {
+      return NextResponse.json({ error: '您没有权限修改该关键词库' }, { status: 403 });
+    }
+
+    // 添加关键词
+    if (action === 'addKeywords' && keywords) {
+      const library = await addKeywordsToLibrary(id, keywords);
+      if (!library) {
+        return NextResponse.json({ error: '添加关键词失败' }, { status: 500 });
+      }
+      return NextResponse.json({ library });
+    }
+
+    // 删除单个关键词
+    if (action === 'removeKeyword' && keyword) {
+      const library = await removeKeywordFromLibrary(id, keyword);
+      if (!library) {
+        return NextResponse.json({ error: '删除关键词失败' }, { status: 500 });
+      }
+      return NextResponse.json({ library });
+    }
+
+    // 更新关键词库信息
+    const input: UpdateKeywordLibraryInput = {
+      name: data.name,
+      description: data.description,
+      keywords: data.keywords,
+    };
+
+    const library = await updateKeywordLibrary(id, input);
+    if (!library) {
+      return NextResponse.json({ error: '更新关键词库失败' }, { status: 500 });
+    }
+    return NextResponse.json({ library });
+  } catch (error) {
+    console.error('更新关键词库失败:', error);
+    return NextResponse.json({ error: '更新关键词库失败' }, { status: 500 });
+  }
+}
+
+/**
+ * DELETE /api/keywords
+ * 删除关键词库 - 只能删除自己企业的关键词库
+ */
+export async function DELETE(request: NextRequest) {
+  try {
+    const user = await getCurrentUser(request);
+    
+    if (!user) {
+      return NextResponse.json({ error: '请先登录' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+
+    if (!id) {
+      return NextResponse.json({ error: '缺少关键词库ID' }, { status: 400 });
+    }
+
+    // 验证关键词库是否属于用户的企业
+    const existingLibrary = await getKeywordLibraryById(id);
+    if (!existingLibrary) {
+      return NextResponse.json({ error: '关键词库不存在' }, { status: 404 });
+    }
+    const hasAccess = await validateBusinessOwnership(user.id, existingLibrary.businessId);
+    if (!hasAccess) {
+      return NextResponse.json({ error: '您没有权限删除该关键词库' }, { status: 403 });
+    }
+
+    const success = await deleteKeywordLibrary(id);
+    if (!success) {
+      return NextResponse.json({ error: '删除关键词库失败' }, { status: 500 });
+    }
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('删除关键词库失败:', error);
+    return NextResponse.json({ error: '删除关键词库失败' }, { status: 500 });
   }
 }
