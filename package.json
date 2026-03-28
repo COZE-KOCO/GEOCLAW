@@ -22,7 +22,11 @@
     "directories": {
       "output": "release"
     },
-
+    "files": [
+      "package.json",
+      "dist/electron/**/*",
+      "public/**/*"
+    ],
     "extraResources": [
       {
         "from": ".next",
