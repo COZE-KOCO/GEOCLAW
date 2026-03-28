@@ -23,12 +23,7 @@
       "output": "release"
     },
     "files": [
-      {
-        "from": ".",
-        "filter": [
-          "package.json"
-        ]
-      },
+      "package.json",
       "dist/electron/**/*",
       "public/**/*"
     ],
