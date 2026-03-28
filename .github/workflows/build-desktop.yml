@@ -9,32 +9,33 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+      
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-
+      
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
+      
       - name: Install dependencies
         run: pnpm install
-
+      
       - name: Build Next.js
         run: pnpm build
-
+      
       - name: Build Electron
         run: pnpm electron:build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+      
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-exe
           path: release/*.exe
+          retention-days: 30
