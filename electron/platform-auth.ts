@@ -815,34 +815,42 @@ export class PlatformAuthManager {
       const mainSession = this.mainWindow.webContents.session;
       const cookies = await mainSession.cookies.get({});
       
-      // 详细日志：列出所有 cookie
-      console.log(`[Electron] Session 中的所有 cookie 数量: ${cookies.length}`);
-      cookies.forEach((c, i) => {
-        console.log(`[Electron] Cookie[${i}]: name=${c.name}, domain=${c.domain}, path=${c.path}, secure=${c.secure}, httpOnly=${c.httpOnly}`);
+      // 获取 API 的域名，用于精确匹配 cookie
+      const apiHostname = new URL(this.apiBaseUrl).hostname;
+      
+      // 辅助函数：检查 cookie 域名是否匹配
+      const isDomainMatch = (cookieDomain: string | undefined, targetDomain: string): boolean => {
+        if (!cookieDomain) return false;
+        const normalizedCookieDomain = cookieDomain.startsWith('.') ? cookieDomain.slice(1) : cookieDomain;
+        return normalizedCookieDomain === targetDomain || targetDomain.endsWith('.' + normalizedCookieDomain);
+      };
+      
+      // 详细日志：列出所有相关 cookie
+      console.log(`[Electron] API 域名: ${apiHostname}`);
+      console.log(`[Electron] Session 中的 cookie 数量: ${cookies.length}`);
+      const userTokens = cookies.filter(c => c.name === 'user_token' || c.name === 'user_token_electron');
+      userTokens.forEach((c, i) => {
+        const matches = isDomainMatch(c.domain, apiHostname);
+        console.log(`[Electron] ${c.name}[${i}]: domain=${c.domain}, 匹配API域名=${matches}`);
       });
       
-      // 优先使用 user_token_electron（非 partitioned，Electron 兼容）
-      // 如果没有，再尝试 user_token（partitioned cookie，可能在 Electron 中无法正确获取）
-      let userToken = cookies.find(c => c.name === 'user_token_electron');
-      if (userToken) {
-        console.log(`[Electron] 使用 user_token_electron cookie`);
-      } else {
-        userToken = cookies.find(c => c.name === 'user_token');
-        if (userToken) {
-          console.log(`[Electron] 使用 user_token cookie（partitioned）`);
-        }
+      // 优先使用与 API 域名匹配的 cookie
+      let userToken = cookies.find(c => 
+        (c.name === 'user_token_electron' || c.name === 'user_token') && isDomainMatch(c.domain, apiHostname)
+      );
+      
+      if (!userToken) {
+        // 如果没有匹配的，使用任意一个
+        userToken = cookies.find(c => c.name === 'user_token_electron') || 
+                    cookies.find(c => c.name === 'user_token');
       }
       
       if (!userToken) {
-        console.log(`[Electron] 未找到 user_token cookie，可能原因：`);
-        console.log(`[Electron]   1. 用户未登录`);
-        console.log(`[Electron]   2. Cookie 使用了 partitioned 属性，Electron session 无法获取`);
-        console.log(`[Electron]   3. Cookie 域名不匹配`);
-        // 用户未登录，返回空列表，不显示错误
+        console.log(`[Electron] 未找到有效的认证 cookie`);
         return {};
       }
       
-      console.log(`[Electron] 找到 user_token cookie: ${userToken.value.substring(0, 20)}...`);
+      console.log(`[Electron] 使用 cookie: ${userToken.name}@${userToken.domain}`);
     } catch (e) {
       console.error('[Electron] 检查登录状态失败:', e);
       return {};
@@ -930,21 +938,57 @@ export class PlatformAuthManager {
       const mainSession = this.mainWindow.webContents.session;
       const cookies = await mainSession.cookies.get({});
       
-      // 优先使用 user_token_electron（非 partitioned，Electron 兼容）
-      // 如果没有，再尝试 user_token（partitioned cookie，可能在 Electron 中无法正确获取）
-      let userToken = cookies.find(c => c.name === 'user_token_electron');
+      // 获取 API 的域名，用于精确匹配 cookie
+      const apiHostname = new URL(this.apiBaseUrl).hostname;
+      console.log(`[Electron] API 域名: ${apiHostname}`);
+      
+      // 辅助函数：检查 cookie 域名是否匹配
+      const isDomainMatch = (cookieDomain: string | undefined, targetDomain: string): boolean => {
+        if (!cookieDomain) return false;
+        // cookie 域名可能是 ".example.com" 或 "example.com" 格式
+        const normalizedCookieDomain = cookieDomain.startsWith('.') ? cookieDomain.slice(1) : cookieDomain;
+        return normalizedCookieDomain === targetDomain || targetDomain.endsWith('.' + normalizedCookieDomain);
+      };
+      
+      // 优先级 1: 找到与 API 域名匹配的 user_token_electron
+      let userToken = cookies.find(c => 
+        c.name === 'user_token_electron' && isDomainMatch(c.domain, apiHostname)
+      );
+      
       if (userToken) {
         cookieHeader = `user_token_electron=${userToken.value}`;
-        console.log(`[Electron] 已获取认证 cookie: user_token_electron=${userToken.value.substring(0, 20)}...`);
+        console.log(`[Electron] 使用域名匹配的 user_token_electron cookie (domain: ${userToken.domain})`);
       } else {
-        userToken = cookies.find(c => c.name === 'user_token');
+        // 优先级 2: 找到与 API 域名匹配的 user_token
+        userToken = cookies.find(c => 
+          c.name === 'user_token' && isDomainMatch(c.domain, apiHostname)
+        );
+        
         if (userToken) {
           cookieHeader = `user_token=${userToken.value}`;
-          console.log(`[Electron] 已获取认证 cookie: user_token=${userToken.value.substring(0, 20)}...`);
+          console.log(`[Electron] 使用域名匹配的 user_token cookie (domain: ${userToken.domain})`);
         } else {
-          console.log(`[Electron] 警告: 主窗口 session 中未找到 user_token 或 user_token_electron cookie`);
-          console.log(`[Electron] 可用 cookies: ${cookies.map(c => c.name).join(', ')}`);
+          // 优先级 3: 使用任意 user_token_electron
+          userToken = cookies.find(c => c.name === 'user_token_electron');
+          if (userToken) {
+            cookieHeader = `user_token_electron=${userToken.value}`;
+            console.log(`[Electron] 使用 user_token_electron cookie (domain: ${userToken.domain}, 未匹配 API 域名)`);
+          } else {
+            // 优先级 4: 使用任意 user_token
+            userToken = cookies.find(c => c.name === 'user_token');
+            if (userToken) {
+              cookieHeader = `user_token=${userToken.value}`;
+              console.log(`[Electron] 使用 user_token cookie (domain: ${userToken.domain}, 未匹配 API 域名)`);
+            } else {
+              console.log(`[Electron] 警告: 主窗口 session 中未找到 user_token 或 user_token_electron cookie`);
+              console.log(`[Electron] 可用 cookies: ${cookies.map(c => `${c.name}@${c.domain}`).join(', ')}`);
+            }
+          }
         }
+      }
+      
+      if (userToken) {
+        console.log(`[Electron] 已获取认证 cookie: ${userToken.name}=${userToken.value.substring(0, 20)}...`);
       }
     } catch (e) {
       console.error(`[Electron] 获取认证 cookie 失败:`, e);
