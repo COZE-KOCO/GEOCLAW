@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
     
     steps:
       - name: Checkout code
@@ -28,10 +30,8 @@ jobs:
       - name: Build Next.js
         run: pnpm build
       
-      - name: Build Electron and Publish
-        run: pnpm electron:build:publish
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build Electron
+        run: pnpm electron:build
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -39,3 +39,10 @@ jobs:
           name: windows-exe
           path: release/*.exe
           retention-days: 30
+      
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
