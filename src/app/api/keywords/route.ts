@@ -11,17 +11,33 @@ import {
   type CreateKeywordLibraryInput,
   type UpdateKeywordLibraryInput,
 } from '@/lib/keyword-store';
+import { getCurrentUser, validateBusinessOwnership } from '@/lib/user-auth';
+import { getBusinessesByOwner } from '@/lib/business-store';
+
+/**
+ * 获取用户的默认企业ID
+ */
+async function getUserBusinessId(userId: string): Promise<{ businessId: string } | { needsCreateBusiness: true }> {
+  const businesses = await getBusinessesByOwner(userId);
+  if (businesses.length === 0) {
+    return { needsCreateBusiness: true };
+  }
+  return { businessId: businesses[0].id };
+}
 
 /**
  * GET /api/keywords
  * 获取关键词库列表或单个关键词库
- * Query params:
- * - id: 关键词库ID（可选，获取单个）
- * - businessId: 商家ID（必填）
- * - stats: 是否获取统计信息
+ * 注意：用户只能获取自己所属企业的关键词库
  */
 export async function GET(request: NextRequest) {
   try {
+    const user = await getCurrentUser(request);
+    
+    if (!user) {
+      return NextResponse.json({ error: '请先登录' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
     const businessId = searchParams.get('businessId');
@@ -33,21 +49,55 @@ export async function GET(request: NextRequest) {
       if (!library) {
         return NextResponse.json({ error: '关键词库不存在' }, { status: 404 });
       }
+      // 验证关键词库是否属于用户的企业
+      const hasAccess = await validateBusinessOwnership(user.id, library.businessId);
+      if (!hasAccess) {
+        return NextResponse.json({ error: '您没有权限访问该关键词库' }, { status: 403 });
+      }
       return NextResponse.json({ library });
     }
 
+    // 验证并获取用户的企业ID
+    let targetBusinessId: string | null = null;
+    
+    if (businessId) {
+      // 前端传递了 businessId，验证用户是否拥有该商家
+      const hasAccess = await validateBusinessOwnership(user.id, businessId);
+      if (!hasAccess) {
+        // 返回空数据而不是错误
+        return NextResponse.json({ 
+          libraries: [],
+          needsCreateBusiness: true 
+        });
+      }
+      targetBusinessId = businessId;
+    } else {
+      // 没有传递 businessId，获取用户的第一个商家
+      const result = await getUserBusinessId(user.id);
+      if ('needsCreateBusiness' in result) {
+        // 返回空数据而不是错误
+        if (getStats) {
+          return NextResponse.json({ 
+            stats: { total: 0, totalKeywords: 0 },
+            needsCreateBusiness: true 
+          });
+        }
+        return NextResponse.json({ 
+          libraries: [],
+          needsCreateBusiness: true 
+        });
+      }
+      targetBusinessId = result.businessId;
+    }
+
     // 获取统计信息
-    if (getStats && businessId) {
-      const stats = await getKeywordLibraryStats(businessId);
+    if (getStats) {
+      const stats = await getKeywordLibraryStats(targetBusinessId);
       return NextResponse.json({ stats });
     }
 
     // 获取关键词库列表
-    if (!businessId) {
-      return NextResponse.json({ error: '缺少商家ID' }, { status: 400 });
-    }
-
-    const libraries = await getKeywordLibrariesByBusiness(businessId);
+    const libraries = await getKeywordLibrariesByBusiness(targetBusinessId);
     return NextResponse.json({ libraries });
   } catch (error) {
     console.error('获取关键词库数据失败:', error);
@@ -57,14 +107,45 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/keywords
- * 创建关键词库
+ * 创建关键词库 - 只能为用户自己的企业创建
  */
 export async function POST(request: NextRequest) {
   try {
+    const user = await getCurrentUser(request);
+    
+    if (!user) {
+      return NextResponse.json({ error: '请先登录' }, { status: 401 });
+    }
+
     const body = await request.json();
     
+    // 验证并获取用户的企业ID
+    let targetBusinessId: string;
+    
+    if (body.businessId) {
+      // 前端传递了 businessId，验证用户是否拥有该商家
+      const hasAccess = await validateBusinessOwnership(user.id, body.businessId);
+      if (!hasAccess) {
+        return NextResponse.json({ 
+          error: '请先创建企业',
+          needsCreateBusiness: true 
+        });
+      }
+      targetBusinessId = body.businessId;
+    } else {
+      // 没有传递 businessId，获取用户的第一个商家
+      const result = await getUserBusinessId(user.id);
+      if ('needsCreateBusiness' in result) {
+        return NextResponse.json({ 
+          error: '请先创建企业',
+          needsCreateBusiness: true 
+        });
+      }
+      targetBusinessId = result.businessId;
+    }
+
     const input: CreateKeywordLibraryInput = {
-      businessId: body.businessId,
+      businessId: targetBusinessId,
       name: body.name,
       description: body.description,
       keywords: body.keywords,
@@ -83,15 +164,31 @@ export async function POST(request: NextRequest) {
 
 /**
  * PUT /api/keywords
- * 更新关键词库
+ * 更新关键词库 - 只能更新自己企业的关键词库
  */
 export async function PUT(request: NextRequest) {
   try {
+    const user = await getCurrentUser(request);
+    
+    if (!user) {
+      return NextResponse.json({ error: '请先登录' }, { status: 401 });
+    }
+
     const body = await request.json();
     const { id, action, keyword, keywords, ...data } = body;
 
     if (!id) {
       return NextResponse.json({ error: '缺少关键词库ID' }, { status: 400 });
+    }
+
+    // 验证关键词库是否属于用户的企业
+    const existingLibrary = await getKeywordLibraryById(id);
+    if (!existingLibrary) {
+      return NextResponse.json({ error: '关键词库不存在' }, { status: 404 });
+    }
+    const hasAccess = await validateBusinessOwnership(user.id, existingLibrary.businessId);
+    if (!hasAccess) {
+      return NextResponse.json({ error: '您没有权限修改该关键词库' }, { status: 403 });
     }
 
     // 添加关键词
@@ -132,15 +229,31 @@ export async function PUT(request: NextRequest) {
 
 /**
  * DELETE /api/keywords
- * 删除关键词库
+ * 删除关键词库 - 只能删除自己企业的关键词库
  */
 export async function DELETE(request: NextRequest) {
   try {
+    const user = await getCurrentUser(request);
+    
+    if (!user) {
+      return NextResponse.json({ error: '请先登录' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
 
     if (!id) {
       return NextResponse.json({ error: '缺少关键词库ID' }, { status: 400 });
+    }
+
+    // 验证关键词库是否属于用户的企业
+    const existingLibrary = await getKeywordLibraryById(id);
+    if (!existingLibrary) {
+      return NextResponse.json({ error: '关键词库不存在' }, { status: 404 });
+    }
+    const hasAccess = await validateBusinessOwnership(user.id, existingLibrary.businessId);
+    if (!hasAccess) {
+      return NextResponse.json({ error: '您没有权限删除该关键词库' }, { status: 403 });
     }
 
     const success = await deleteKeywordLibrary(id);

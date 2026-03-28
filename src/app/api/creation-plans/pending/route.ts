@@ -90,15 +90,30 @@ export async function GET(request: NextRequest) {
     
     const supabase = getSupabaseClient();
     const now = new Date();
-    const currentTime = now.toTimeString().slice(0, 5); // HH:mm
-    const currentDay = now.getDay();
-    const currentDate = now.getDate();
+    
+    // 使用中国时区 (UTC+8) 获取当前时间
+    // 用户输入的 scheduledTime 是中国时间，所以比较时也要用中国时间
+    const chinaTimeString = now.toLocaleString('en-US', { 
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+    const chinaTime = new Date(chinaTimeString);
+    const currentTime = chinaTime.toTimeString().slice(0, 5); // HH:mm (中国时区)
+    const currentDay = chinaTime.getDay(); // 星期几 (中国时区)
+    const currentDate = chinaTime.getDate(); // 日期 (中国时区)
     
     console.log('[PendingPlans] 查询待执行计划:', {
       currentTime,
       currentDay,
       currentDate,
       businessId,
+      serverTime: now.toTimeString().slice(0, 5),
     });
     
     // 查询活跃计划
@@ -143,18 +158,38 @@ export async function GET(request: NextRequest) {
         return false;
       }
       
-      // 检查上次执行时间（防止同一分钟内重复执行）
+      // 检查计划是否刚创建（宽限期：30分钟）
+      // 刚创建的计划即使时间刚过也应该执行
+      const createdAt = plan.created_at ? new Date(plan.created_at) : null;
+      const minutesSinceCreated = createdAt ? Math.floor((now.getTime() - createdAt.getTime()) / (1000 * 60)) : null;
+      const isNewlyCreated = createdAt && minutesSinceCreated !== null && minutesSinceCreated < 30;
+      
+      console.log(`[PendingPlans] 计划 ${plan.id} (${plan.plan_name}): scheduledTime=${plan.scheduled_time}, createdAt=${plan.created_at}, minutesSinceCreated=${minutesSinceCreated}, isNewlyCreated=${isNewlyCreated}`);
+      
+      // 检查上次执行时间（防止时间窗口内重复执行）
+      // 注意：时间窗口为 5 分钟，所以防重复检查也要 5 分钟
       if (plan.last_run_at) {
         const lastRun = new Date(plan.last_run_at);
         const minutesSinceLastRun = (now.getTime() - lastRun.getTime()) / (1000 * 60);
-        if (minutesSinceLastRun < 1) {
-          console.log(`[PendingPlans] 计划 ${plan.id} 1分钟内已执行过，跳过`);
-          return false; // 1分钟内已执行过
+        if (minutesSinceLastRun < 5) {
+          console.log(`[PendingPlans] 计划 ${plan.id} 5分钟内已执行过，跳过`);
+          return false; // 5分钟内已执行过（与时间窗口匹配）
         }
       }
       
       const { frequency, scheduled_time, scheduled_days, scheduled_dates } = plan;
       let shouldExecute = false;
+      
+      // 解析计划执行时间
+      const [schedHour, schedMin] = (scheduled_time || '09:00').split(':').map(Number);
+      const schedMinutes = schedHour * 60 + schedMin;  // 转换为分钟数
+      const [currHour, currMin] = currentTime.split(':').map(Number);
+      const currMinutes = currHour * 60 + currMin;
+      
+      // 计算时间差（当前时间 - 计划时间）
+      const timeDiff = currMinutes - schedMinutes;
+      
+      console.log(`[PendingPlans] 计划 ${plan.id} timeDiff=${timeDiff}, currMinutes=${currMinutes}, schedMinutes=${schedMinutes}`);
       
       switch (frequency) {
         case 'hourly':
@@ -164,20 +199,42 @@ export async function GET(request: NextRequest) {
           
         case 'daily':
           // 每天执行，使用时间窗口匹配（避免精确匹配导致错过）
-          shouldExecute = isTimeMatch(scheduled_time, currentTime);
+          // 宽限期：刚创建的计划（30分钟内），只要时间已过就执行
+          if (isNewlyCreated && timeDiff >= 0) {
+            console.log(`[PendingPlans] 计划 ${plan.id} daily 刚创建，宽限期内执行 (时间差: ${timeDiff}分钟)`);
+            shouldExecute = true;
+          } else {
+            shouldExecute = isTimeMatch(scheduled_time, currentTime);
+          }
           break;
           
         case 'weekly':
           // 每周执行，检查星期几和时间窗口
           const days = scheduled_days || [];
-          shouldExecute = days.includes(currentDay) && isTimeMatch(scheduled_time, currentTime);
+          const isTodayValid = days.includes(currentDay);
+          
+          // 宽限期：刚创建的计划，今天在执行日内，且时间已过
+          if (isNewlyCreated && isTodayValid && timeDiff >= 0) {
+            console.log(`[PendingPlans] 计划 ${plan.id} weekly 刚创建，宽限期内执行 (时间差: ${timeDiff}分钟)`);
+            shouldExecute = true;
+          } else {
+            shouldExecute = isTodayValid && isTimeMatch(scheduled_time, currentTime);
+          }
           console.log(`[PendingPlans] 计划 ${plan.id} weekly 检查: days=${JSON.stringify(days)}, currentDay=${currentDay}, timeMatch=${isTimeMatch(scheduled_time, currentTime)}`);
           break;
           
         case 'monthly':
           // 每月执行，检查日期和时间窗口
           const dates = scheduled_dates || [];
-          shouldExecute = dates.includes(currentDate) && isTimeMatch(scheduled_time, currentTime);
+          const isTodayDate = dates.includes(currentDate);
+          
+          // 宽限期：刚创建的计划，今天在执行日内，且时间已过
+          if (isNewlyCreated && isTodayDate && timeDiff >= 0) {
+            console.log(`[PendingPlans] 计划 ${plan.id} monthly 刚创建，宽限期内执行 (时间差: ${timeDiff}分钟)`);
+            shouldExecute = true;
+          } else {
+            shouldExecute = isTodayDate && isTimeMatch(scheduled_time, currentTime);
+          }
           break;
           
         default:

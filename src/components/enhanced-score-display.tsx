@@ -7,8 +7,10 @@ import { Separator } from '@/components/ui/separator';
 import {
   Target,
   Brain,
+  Heart,
   FileCheck,
   Shield,
+  Quote,
   Database,
   Share2,
   Search,
@@ -19,6 +21,7 @@ import {
   CheckCircle2,
   ExternalLink,
 } from 'lucide-react';
+import { DIMENSION_CONFIG } from '@/lib/geo-scoring-unified';
 
 interface EnhancedScoreDisplayProps {
   score: {
@@ -26,26 +29,30 @@ interface EnhancedScoreDisplayProps {
     breakdown: {
       problemOriented: number;
       aiRecognition: number;
+      humanizedExpression: number;
       contentQuality: number;
-      trustBuilding: number;
+      trustAuthority: number;
+      preciseCitation: number;
       structuredData: number;
       multiPlatform: number;
-      seakeywords: number;
+      seoKeywords: number;
     };
-    problemAnalysis: {
+    analysis?: {
       questionPatterns: string[];
-      questionScore: number;
-      suggestions: string[];
-    };
-    contentTemplate?: {
-      type: string;
-      confidence: number;
-      improvements: string[];
-    };
-    platformSuggestions: {
-      primary: string[];
-      secondary: string[];
-      reasons: string[];
+      contentTemplate?: {
+        type: string;
+        confidence: number;
+        improvements: string[];
+      };
+      wordCount: number;
+      hasImages: boolean;
+      hasSchema: boolean;
+      hasFAQ: boolean;
+      keywordsInTitle: boolean;
+      keywordDensity: number;
+      hasExaggeration: boolean;
+      citationFormat: boolean;
+      hasAuthorInfo: boolean;
     };
     suggestions: string[];
     quickWins: string[];
@@ -64,64 +71,44 @@ interface EnhancedScoreDisplayProps {
     aiReferenceRate: string;
     tips: string[];
   };
+  platformSuggestions?: {
+    primary: string[];
+    secondary: string[];
+    reasons: string[];
+  };
 }
 
-const scoreConfig = {
-  problemOriented: {
-    name: '问题导向',
-    max: 2.0,
-    icon: Target,
-    color: 'text-blue-500',
-    description: '内容是否围绕用户问题展开',
-  },
-  aiRecognition: {
-    name: 'AI识别友好',
-    max: 2.0,
-    icon: Brain,
-    color: 'text-purple-500',
-    description: '内容是否易于AI抓取理解',
-  },
-  contentQuality: {
-    name: '内容质量',
-    max: 2.0,
-    icon: FileCheck,
-    color: 'text-green-500',
-    description: '内容深度、数据和案例',
-  },
-  trustBuilding: {
-    name: '信任建立',
-    max: 1.5,
-    icon: Shield,
-    color: 'text-amber-500',
-    description: '权威性和第三方验证',
-  },
-  structuredData: {
-    name: '结构化数据',
-    max: 1.0,
-    icon: Database,
-    color: 'text-cyan-500',
-    description: 'Schema标记和表格结构',
-  },
-  multiPlatform: {
-    name: '多平台适配',
-    max: 1.0,
-    icon: Share2,
-    color: 'text-pink-500',
-    description: '适合多平台分发',
-  },
-  seakeywords: {
-    name: 'SEO关键词',
-    max: 0.5,
-    icon: Search,
-    color: 'text-orange-500',
-    description: '关键词覆盖度',
-  },
+// 维度图标映射
+const dimensionIcons: Record<string, React.ComponentType<{ className?: string }>> = {
+  problemOriented: Target,
+  aiRecognition: Brain,
+  humanizedExpression: Heart,
+  contentQuality: FileCheck,
+  trustAuthority: Shield,
+  preciseCitation: Quote,
+  structuredData: Database,
+  multiPlatform: Share2,
+  seoKeywords: Search,
+};
+
+// 维度颜色映射
+const dimensionColors: Record<string, string> = {
+  problemOriented: 'text-blue-500',
+  aiRecognition: 'text-purple-500',
+  humanizedExpression: 'text-pink-500',
+  contentQuality: 'text-green-500',
+  trustAuthority: 'text-amber-500',
+  preciseCitation: 'text-indigo-500',
+  structuredData: 'text-cyan-500',
+  multiPlatform: 'text-teal-500',
+  seoKeywords: 'text-orange-500',
 };
 
 export function EnhancedScoreDisplay({
   score,
   grade,
   templateRecommendation,
+  platformSuggestions,
 }: EnhancedScoreDisplayProps) {
   return (
     <div className="space-y-6">
@@ -181,7 +168,7 @@ export function EnhancedScoreDisplay({
       )}
 
       {/* 快速提升建议 */}
-      {score.quickWins.length > 0 && (
+      {score.quickWins && score.quickWins.length > 0 && (
         <Card className="border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20">
           <CardHeader>
             <CardTitle className="text-lg flex items-center gap-2">
@@ -204,7 +191,7 @@ export function EnhancedScoreDisplay({
       )}
 
       {/* 问题分析 */}
-      {score.problemAnalysis.questionPatterns.length > 0 && (
+      {score.analysis?.questionPatterns && score.analysis.questionPatterns.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="text-lg flex items-center gap-2">
@@ -214,17 +201,22 @@ export function EnhancedScoreDisplay({
           </CardHeader>
           <CardContent>
             <div className="flex flex-wrap gap-2 mb-3">
-              {score.problemAnalysis.questionPatterns.map((pattern, index) => (
+              {score.analysis.questionPatterns.map((pattern, index) => (
                 <Badge key={index} variant="secondary">
                   {pattern}
                 </Badge>
               ))}
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-500">问题匹配度:</span>
-              <Progress value={score.problemAnalysis.questionScore} className="flex-1" />
-              <span className="text-sm font-semibold">{score.problemAnalysis.questionScore}%</span>
-            </div>
+            {score.analysis.contentTemplate && (
+              <div className="text-sm text-gray-500">
+                内容模板：<span className="font-medium">{score.analysis.contentTemplate.type}</span>
+                {score.analysis.contentTemplate.confidence > 0 && (
+                  <span className="ml-2 text-gray-400">
+                    (置信度: {(score.analysis.contentTemplate.confidence * 100).toFixed(0)}%)
+                  </span>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -233,25 +225,28 @@ export function EnhancedScoreDisplay({
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">评分详情</CardTitle>
-          <CardDescription>基于阿里云GEO优化指南的七大维度</CardDescription>
+          <CardDescription>基于统一GEO评分体系的九大维度</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
             {Object.entries(score.breakdown).map(([key, value]) => {
-              const config = scoreConfig[key as keyof typeof scoreConfig];
-              const Icon = config.icon;
+              const config = DIMENSION_CONFIG[key as keyof typeof DIMENSION_CONFIG];
+              if (!config) return null;
+              
+              const Icon = dimensionIcons[key] || Target;
+              const colorClass = dimensionColors[key] || 'text-gray-500';
               const percentage = (value / config.max) * 100;
 
               return (
                 <div key={key} className="space-y-2">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <Icon className={`h-4 w-4 ${config.color}`} />
+                      <Icon className={`h-4 w-4 ${colorClass}`} />
                       <span className="font-medium">{config.name}</span>
                     </div>
                     <div className="text-right">
-                      <span className={`font-semibold ${config.color}`}>
-                        {value.toFixed(1)}
+                      <span className={`font-semibold ${colorClass}`}>
+                        {value.toFixed(2)}
                       </span>
                       <span className="text-gray-500"> / {config.max}</span>
                     </div>
@@ -266,7 +261,7 @@ export function EnhancedScoreDisplay({
       </Card>
 
       {/* 平台发布建议 */}
-      {score.platformSuggestions.primary.length > 0 && (
+      {platformSuggestions && platformSuggestions.primary.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="text-lg flex items-center gap-2">
@@ -280,7 +275,7 @@ export function EnhancedScoreDisplay({
               <div>
                 <div className="text-sm font-semibold text-green-600 mb-2">主推平台</div>
                 <div className="flex flex-wrap gap-2">
-                  {score.platformSuggestions.primary.map((platform, index) => (
+                  {platformSuggestions.primary.map((platform, index) => (
                     <Badge key={index} className="bg-green-500 text-white">
                       {platform}
                     </Badge>
@@ -290,7 +285,7 @@ export function EnhancedScoreDisplay({
               <div>
                 <div className="text-sm font-semibold text-blue-600 mb-2">次要平台</div>
                 <div className="flex flex-wrap gap-2">
-                  {score.platformSuggestions.secondary.map((platform, index) => (
+                  {platformSuggestions.secondary.map((platform, index) => (
                     <Badge key={index} variant="outline">
                       {platform}
                     </Badge>
@@ -299,7 +294,7 @@ export function EnhancedScoreDisplay({
               </div>
               <Separator />
               <div className="space-y-1">
-                {score.platformSuggestions.reasons.map((reason, index) => (
+                {platformSuggestions.reasons.map((reason, index) => (
                   <div key={index} className="text-sm text-gray-600 dark:text-gray-400 flex items-start gap-2">
                     <CheckCircle2 className="h-4 w-4 text-green-500 mt-0.5 flex-shrink-0" />
                     {reason}
@@ -312,7 +307,7 @@ export function EnhancedScoreDisplay({
       )}
 
       {/* 优化建议 */}
-      {score.suggestions.length > 0 && (
+      {score.suggestions && score.suggestions.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="text-lg flex items-center gap-2">
@@ -346,10 +341,11 @@ export function EnhancedScoreDisplay({
         <CardContent>
           <div className="space-y-2 text-sm">
             <p>✅ <strong>问题导向</strong>：标题用问句形式，第一段开门见山</p>
-            <p>✅ <strong>内容深度</strong>：3000-5000字最佳，包含数据和案例</p>
-            <p>✅ <strong>信任建立</strong>：引用权威来源，添加第三方验证</p>
+            <p>✅ <strong>人性化表达</strong>：使用"我们"、"你"等语言，避免夸大</p>
+            <p>✅ <strong>内容质量</strong>：2500字以上，包含具体数据和案例</p>
+            <p>✅ <strong>信任权威</strong>：引用权威来源，展示E-E-A-T</p>
+            <p>✅ <strong>精准引用</strong>：使用[1][2]标注，确保可追溯</p>
             <p>✅ <strong>结构清晰</strong>：使用表格和列表，便于AI提取</p>
-            <p>✅ <strong>持续优化</strong>：每周监测数据，动态调整策略</p>
           </div>
         </CardContent>
       </Card>

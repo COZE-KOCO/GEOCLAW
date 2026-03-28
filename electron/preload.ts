@@ -376,6 +376,65 @@ const electronAPI = {
     };
   },
 
+  // 监听发布任务进度
+  onPublishTaskProgress: (callback: (data: {
+    planId: string;
+    taskId: string;
+    current: number;
+    total: number;
+    articleTitle?: string;
+    platform?: string;
+    status: 'pending' | 'publishing' | 'completed' | 'failed';
+    message?: string;
+  }) => void) => {
+    ipcRenderer.on('publish-task-progress', (_, data) => callback(data));
+    return () => {
+      ipcRenderer.removeListener('publish-task-progress', callback as any);
+    };
+  },
+
+  // ====== 创作计划调度管理 ======
+
+  // 通知调度器计划已创建
+  notifyCreationPlanCreated: (planId: string, planName: string, executeTime: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('creation-plan-created', { planId, planName, executeTime });
+  },
+
+  // 通知调度器计划已删除
+  notifyCreationPlanDeleted: (planId: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('creation-plan-deleted', { planId });
+  },
+
+  // 通知调度器计划已更新
+  notifyCreationPlanUpdated: (planId: string, planName: string, executeTime: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('creation-plan-updated', { planId, planName, executeTime });
+  },
+
+  // 刷新创作调度器
+  refreshCreationScheduler: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('refresh-creation-scheduler');
+  },
+
+  // 获取已调度的计划列表
+  getScheduledPlans: (): Promise<Array<{ planId: string; planName: string; executeTime: string }>> => {
+    return ipcRenderer.invoke('get-scheduled-plans');
+  },
+
+  // 监听调度器更新
+  onCreationSchedulerUpdated: (callback: (data: {
+    action: 'add' | 'remove' | 'rescheduleAll';
+    planId?: string;
+    planName?: string;
+    executeTime?: string;
+    scheduledCount: number;
+    plans?: Array<{ planId: string; planName: string; executeTime: string }>;
+  }) => void) => {
+    ipcRenderer.on('creation-scheduler-updated', (_, data) => callback(data));
+    return () => {
+      ipcRenderer.removeListener('creation-scheduler-updated', callback as any);
+    };
+  },
+
   // ====== 立即执行任务 ======
 
   // 立即执行指定发布任务
@@ -430,6 +489,57 @@ const electronAPI = {
     ipcRenderer.on('publish-plan-scheduler-completed', (_, data) => callback(data));
     return () => {
       ipcRenderer.removeListener('publish-plan-scheduler-completed', callback as any);
+    };
+  },
+
+  // ====== 可视化选择器相关 ======
+
+  // 启动选择器捕获
+  startSelectorPicker: (url: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('selector-picker:start', url);
+  },
+
+  // 停止选择器捕获
+  stopSelectorPicker: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('selector-picker:stop');
+  },
+
+  // 监听元素选中
+  onSelectorPicked: (callback: (data: {
+    elementInfo: {
+      tagName: string;
+      id?: string;
+      name?: string;
+      className?: string;
+      type?: string;
+      placeholder?: string;
+      text?: string;
+    };
+    selectors: Array<{
+      selector: string;
+      type: string;
+      priority: number;
+      description: string;
+      uniqueness: number;
+      validation: {
+        isValid: boolean;
+        count: number;
+        uniqueness: number;
+      };
+    }>;
+    timestamp: number;
+  }) => void) => {
+    ipcRenderer.on('selector-picker:selected', (_, data) => callback(data));
+    return () => {
+      ipcRenderer.removeListener('selector-picker:selected', callback as any);
+    };
+  },
+
+  // 监听选择器取消
+  onSelectorPickerCancelled: (callback: () => void) => {
+    ipcRenderer.on('selector-picker:cancelled', () => callback());
+    return () => {
+      ipcRenderer.removeListener('selector-picker:cancelled', callback as any);
     };
   },
 };

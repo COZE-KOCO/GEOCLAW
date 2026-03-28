@@ -58,7 +58,7 @@ export function useGenerationConfig(initialConfig?: Partial<GenerationConfig>) {
   // 展开所有模块
   const expandAllModules = useCallback(() => {
     setOpenModules([
-      'basic', 'type', 'image', 'content', 'persona', 'replace',
+      'basic', 'type', 'image', 'content', 'replace',
       'knowledge', 'format', 'structure', 'internal', 'external', 'fixed'
     ]);
   }, []);

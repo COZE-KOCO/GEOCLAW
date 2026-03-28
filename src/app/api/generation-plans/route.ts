@@ -14,6 +14,31 @@ import {
 } from '@/lib/types/generation-config';
 import { selectArticleType, articleTypeMap, articleSizeMap } from '../content/generate/utils';
 import { createContent, type ContentCreationRequest } from '@/lib/content-generation';
+import { processImageMarkers, extractImageHeaders } from '@/lib/image-generation';
+import { getCurrentUser, validateBusinessOwnership } from '@/lib/user-auth';
+import { getBusinessesByOwner } from '@/lib/business-store';
+
+/**
+ * 获取用户的商家ID（支持前端传递或使用默认）
+ */
+async function resolveBusinessId(
+  userId: string, 
+  requestBusinessId?: string | null
+): Promise<{ businessId: string } | { needsCreateBusiness: true }> {
+  if (requestBusinessId) {
+    const hasAccess = await validateBusinessOwnership(userId, requestBusinessId);
+    if (!hasAccess) {
+      return { needsCreateBusiness: true };
+    }
+    return { businessId: requestBusinessId };
+  }
+  
+  const businesses = await getBusinessesByOwner(userId);
+  if (businesses.length === 0) {
+    return { needsCreateBusiness: true };
+  }
+  return { businessId: businesses[0].id };
+}
 
 // 获取文章类型分布的映射
 function getArticleTypesFromDistribution(
@@ -141,18 +166,34 @@ CREATE INDEX IF NOT EXISTS generation_plans_created_at_idx ON generation_plans(c
 /**
  * GET /api/generation-plans
  * 获取生成计划列表
+ * 注意：用户只能获取自己所属企业的计划
  */
 export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
-    const businessId = searchParams.get('businessId');
+    const user = await getCurrentUser(request);
     
-    if (!businessId) {
+    if (!user) {
       return NextResponse.json(
-        { success: false, error: '缺少 businessId' },
-        { status: 400 }
+        { success: false, error: '请先登录' },
+        { status: 401 }
       );
     }
+
+    const { searchParams } = new URL(request.url);
+    const requestBusinessId = searchParams.get('businessId');
+
+    // 获取用户的商家ID
+    const result = await resolveBusinessId(user.id, requestBusinessId);
+    
+    // 如果用户没有企业，返回空数据
+    if ('needsCreateBusiness' in result) {
+      return NextResponse.json({
+        success: true,
+        needsCreateBusiness: true,
+        plans: []
+      });
+    }
+    const businessId = result.businessId;
     
     const supabase = getSupabaseClient();
     const { data, error } = await supabase
@@ -210,18 +251,35 @@ export async function GET(request: NextRequest) {
 /**
  * POST /api/generation-plans
  * 创建生成计划并开始执行
+ * 注意：用户只能为自己企业创建计划
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { businessId, config, mode } = body;
+    const user = await getCurrentUser(request);
     
-    if (!businessId) {
+    if (!user) {
       return NextResponse.json(
-        { success: false, error: '缺少 businessId' },
-        { status: 400 }
+        { success: false, error: '请先登录' },
+        { status: 401 }
       );
     }
+
+    const body = await request.json();
+
+    // 获取用户的商家ID
+    const result = await resolveBusinessId(user.id, body.businessId);
+    
+    // 如果用户没有企业，返回错误提示
+    if ('needsCreateBusiness' in result) {
+      return NextResponse.json({ 
+        success: false,
+        error: '请先创建企业',
+        needsCreateBusiness: true 
+      });
+    }
+    const businessId = result.businessId;
+
+    const { config, mode } = body;
     
     if (!config) {
       return NextResponse.json(
@@ -236,8 +294,8 @@ export async function POST(request: NextRequest) {
       ...config,
     };
     
-    // 验证配置
-    const validation = validateGenerationConfig(fullConfig);
+    // 验证配置（严格模式，因为要立即执行生成）
+    const validation = validateGenerationConfig(fullConfig, true);
     if (!validation.valid) {
       return NextResponse.json(
         { success: false, error: validation.errors.join('; ') },
@@ -318,8 +376,10 @@ export async function POST(request: NextRequest) {
     
     // 异步执行生成任务（使用 setTimeout 确保在请求完成后执行）
     // 注意：在生产环境中应该使用消息队列或专门的 worker
+    // 提取请求头用于后续 API 调用
+    const customHeaders = extractImageHeaders(request.headers);
     setTimeout(() => {
-      executeGenerationTasks(plan.id, businessId, keywords, articleTypes, fullConfig)
+      executeGenerationTasks(plan.id, businessId, keywords, articleTypes, fullConfig, customHeaders)
         .catch(error => {
           console.error('生成任务执行失败:', error);
         });
@@ -346,7 +406,8 @@ async function executeGenerationTasks(
   businessId: string,
   keywords: string[],
   articleTypes: Array<'what' | 'how' | 'top' | 'normal'>,
-  config: GenerationConfig
+  config: GenerationConfig,
+  customHeaders?: Record<string, string>
 ) {
   console.log(`[生成任务] 开始执行计划 ${planId}，关键词: ${keywords.join(', ')}, 文章数: ${config.articleCount}`);
   const supabase = getSupabaseClient();
@@ -376,6 +437,8 @@ async function executeGenerationTasks(
         brandInfo: config.customInstructions,
         
         // 图片设置
+        imageSource: config.imageSource,
+        imageFilter: config.imageFilter,
         enableThumbnail: config.enableThumbnail,
         enableContentImages: config.enableContentImages,
         imageCount: config.imageCount,
@@ -420,7 +483,6 @@ async function executeGenerationTasks(
         creativityLevel: config.creativityLevel,
         perspective: config.perspective,
         formality: config.formality,
-        personaId: config.personaId,
         replacements: config.replacements,
         enableWebSearch: config.enableWebSearch,
         knowledgeBaseId: config.knowledgeBaseId,
@@ -431,13 +493,35 @@ async function executeGenerationTasks(
       const result = await createContent(creationRequest);
       
       if (result?.generated) {
+        // AI 生图后处理
+        let finalContent = result.generated.content;
+        let coverImageUrl: string | undefined;
+        
+        if (config.imageSource === 'ai') {
+          try {
+            console.log(`[AI生图] 处理关键词 "${keyword}" 的图片...`);
+            const imageResult = await processImageMarkers(result.generated.content, {
+              customHeaders,
+            });
+            
+            finalContent = imageResult.processedContent;
+            if (imageResult.coverImage) {
+              coverImageUrl = imageResult.coverImage.url;
+              console.log(`[AI生图] 封面图生成成功`);
+            }
+            console.log(`[AI生图] 生成了 ${imageResult.contentImages.length} 张配图`);
+          } catch (imageError) {
+            console.error(`[AI生图] 处理失败:`, imageError);
+          }
+        }
+        
         // 保存草稿
         const { data: draft } = await supabase
           .from('content_drafts')
           .insert({
             business_id: businessId,
             title: result.generated.title,
-            content: result.generated.content,
+            content: finalContent,
             distillation_words: result.generated.distillationWords,
             outline: result.generated.outline,
             seo_score: result.generated.seoScore,

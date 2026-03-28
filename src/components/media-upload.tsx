@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -271,6 +272,9 @@ export function MediaUpload({
         <DialogContent className="max-w-4xl">
           <DialogHeader>
             <DialogTitle>媒体预览</DialogTitle>
+            <DialogDescription>
+              预览选中的图片或视频文件
+            </DialogDescription>
           </DialogHeader>
           {previewUrl && (
             <div className="relative">

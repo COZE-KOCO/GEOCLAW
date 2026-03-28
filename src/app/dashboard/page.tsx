@@ -71,6 +71,16 @@ interface KeywordData {
   position: number;
 }
 
+interface LatestNotification {
+  id: string;
+  title: string;
+  summary: string;
+  icon: string;
+  link: string;
+  publishAt: string;
+  isPinned: boolean;
+}
+
 interface DashboardData {
   stats: DashboardStats;
   recentContent: RecentContent[];
@@ -122,12 +132,30 @@ export default function DashboardPage() {
   // 运营数据状态
   const { selectedBusiness } = useBusiness();
   const [accounts, setAccounts] = useState<any[]>([]);
-  const [personas, setPersonas] = useState<any[]>([]);
   const [contentDrafts, setContentDrafts] = useState<any[]>([]);
+  
+  // 最新通知状态
+  const [latestNotification, setLatestNotification] = useState<LatestNotification | null>(null);
 
   useEffect(() => {
     fetchDashboardData();
+    fetchLatestNotification();
   }, [selectedBusiness]);
+
+  // 获取最新通知
+  const fetchLatestNotification = async () => {
+    try {
+      const response = await fetch('/api/user/notifications');
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success && result.data && result.data.length > 0) {
+          setLatestNotification(result.data[0]);
+        }
+      }
+    } catch (error) {
+      console.error('获取通知失败:', error);
+    }
+  };
 
   // 根据选择的商家加载运营数据
   useEffect(() => {
@@ -143,13 +171,6 @@ export default function DashboardPage() {
       if (accountsRes.ok) {
         const data = await accountsRes.json();
         setAccounts(data.accounts || []);
-      }
-      
-      // 加载人设
-      const personasRes = await fetch(`/api/personas?businessId=${businessId}`);
-      if (personasRes.ok) {
-        const data = await personasRes.json();
-        setPersonas(data.personas || []);
       }
       
       // 加载内容草稿
@@ -252,16 +273,20 @@ export default function DashboardPage() {
               欢迎来到 <span className="text-purple-600 dark:text-purple-400">GEO优化</span> 的工作台
             </h1>
           </div>
-          <Link 
-            href="/whats-new"
-            className="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-400 hover:text-purple-600 dark:hover:text-purple-400 transition-colors"
-          >
-            <span className="text-base">📦</span>
-            <span>V1.0.0 重磅来袭</span>
-            <span className="text-slate-500 dark:text-slate-400">—— GEO优化工具上线，支持...</span>
-            <span className="text-purple-600 dark:text-purple-400 font-medium">更多</span>
-            <ExternalLink className="h-3.5 w-3.5" />
-          </Link>
+          {latestNotification && (
+            <Link 
+              href={latestNotification.link || '/whats-new'}
+              className="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-400 hover:text-purple-600 dark:hover:text-purple-400 transition-colors"
+            >
+              <span className="text-base">{latestNotification.icon || '📦'}</span>
+              <span className="font-medium">{latestNotification.title}</span>
+              {latestNotification.summary && (
+                <span className="text-slate-500 dark:text-slate-400">—— {latestNotification.summary.length > 20 ? latestNotification.summary.slice(0, 20) + '...' : latestNotification.summary}</span>
+              )}
+              <span className="text-purple-600 dark:text-purple-400 font-medium">更多</span>
+              <ExternalLink className="h-3.5 w-3.5" />
+            </Link>
+          )}
         </div>
 
         {/* 核心指标卡片 - 保留原有4个指标 */}
@@ -396,21 +421,6 @@ export default function DashboardPage() {
                   </div>
                   <div className="w-10 h-10 rounded-xl bg-green-100 dark:bg-green-900/50 flex items-center justify-center">
                     <Target className="h-5 w-5 text-green-500" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            
-            {/* 人设数量 */}
-            <Card className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700">
-              <CardContent className="pt-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">人设数量</p>
-                    <p className="text-2xl font-bold text-slate-800 dark:text-white">{personas.length}</p>
-                  </div>
-                  <div className="w-10 h-10 rounded-xl bg-orange-100 dark:bg-orange-900/50 flex items-center justify-center">
-                    <Network className="h-5 w-5 text-orange-500" />
                   </div>
                 </div>
               </CardContent>

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { calculateGEOScoreV2, getGradeV2, type ContentAnalysisV2 } from '@/lib/geo-scoring-v2';
-import { recommendTemplate } from '@/lib/content-templates';
+import { calculateGEOScore, getGrade, type ContentAnalysisUnified, type GEOScoreUnified } from '@/lib/geo-scoring-unified';
 
 export async function POST(request: NextRequest) {
   try {
@@ -23,7 +22,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 分析内容
-    const analysis: ContentAnalysisV2 = {
+    const analysis: ContentAnalysisUnified = {
       title,
       content,
       author: author || undefined,
@@ -31,33 +30,43 @@ export async function POST(request: NextRequest) {
       references: references || [],
       hasSchema: hasSchema || false,
       hasFAQ: hasFAQ || false,
+      hasImages: content.includes('![图片') || content.includes('<img'),
       wordCount: content.length,
       targetQuestion: targetQuestion || undefined,
       industry: industry || undefined,
     };
 
-    // 计算GEO评分 V2
-    const geoScore = calculateGEOScoreV2(analysis);
-    const gradeInfo = getGradeV2(geoScore.total);
-
-    // 推荐内容模板
-    const templateRecommendation = recommendTemplate(title, content);
+    // 计算GEO评分（统一版）
+    const geoScore = calculateGEOScore(analysis);
+    const gradeInfo = getGrade(geoScore.total);
 
     return NextResponse.json({
       success: true,
       score: geoScore,
-      grade: gradeInfo,
-      templateRecommendation: {
-        templateType: templateRecommendation.template.type,
-        templateName: templateRecommendation.template.name,
-        confidence: templateRecommendation.confidence,
-        reason: templateRecommendation.reason,
-        aiReferenceRate: templateRecommendation.template.aiReferenceRate,
-        tips: templateRecommendation.template.tips.slice(0, 3),
+      grade: {
+        grade: gradeInfo.grade,
+        color: gradeInfo.color,
+        description: gradeInfo.description,
+        aiReferenceRate: gradeInfo.aiReferenceRate,
       },
-      problemAnalysis: geoScore.problemAnalysis,
+      templateRecommendation: {
+        templateType: geoScore.analysis.contentTemplate.type,
+        templateName: getTemplateName(geoScore.analysis.contentTemplate.type),
+        confidence: geoScore.analysis.contentTemplate.confidence,
+        reason: geoScore.analysis.contentTemplate.improvements[0] || '内容结构清晰',
+        aiReferenceRate: gradeInfo.aiReferenceRate,
+        tips: geoScore.quickWins,
+      },
+      problemAnalysis: {
+        questionPatterns: geoScore.analysis.questionPatterns,
+        suggestions: geoScore.suggestions.slice(0, 3),
+      },
       quickWins: geoScore.quickWins,
-      platformSuggestions: geoScore.platformSuggestions,
+      platformSuggestions: {
+        primary: ['知乎专栏', '百度百家号'],
+        secondary: ['今日头条', '微信公众号'],
+        reasons: ['多平台分发可提升内容曝光率'],
+      },
     });
 
   } catch (error) {
@@ -67,4 +76,19 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+/**
+ * 获取模板名称
+ */
+function getTemplateName(type: string): string {
+  const names: Record<string, string> = {
+    'qna': '问答型',
+    'comparison': '对比型',
+    'guide': '指南型',
+    'case': '案例型',
+    'report': '报告型',
+    'unknown': '通用型',
+  };
+  return names[type] || '通用型';
 }

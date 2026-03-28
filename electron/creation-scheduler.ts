@@ -9,9 +9,10 @@
  * - PATCH /api/creation-plans/[id]/stats - 更新计划统计
  */
 
-import { BrowserWindow, ipcMain } from 'electron';
+import { BrowserWindow, ipcMain, session } from 'electron';
 import * as https from 'https';
 import * as http from 'http';
+import type { GenerationConfig, ModelSelectionMode } from '../src/lib/types/generation-config';
 
 // 创作计划接口 - 与前端类型保持一致
 interface CreationPlan {
@@ -46,7 +47,6 @@ interface CreationPlan {
     formality: string;
     customInstructions: string;
     contentIncludeKeywords: string;
-    personaId?: string;
     replacements: { find: string; replace: string }[];
     enableWebSearch: boolean;
     knowledgeBaseId?: string;
@@ -72,6 +72,9 @@ interface CreationPlan {
     enableFixedOutro: boolean;
     fixedOutro: string;
     model: string;
+    modelSelectionMode?: ModelSelectionMode;
+    modelPool?: string[];
+    modelWeights?: Record<string, number>;
     articleCount: number;
   };
   publishConfig: {
@@ -82,8 +85,9 @@ interface CreationPlan {
       accountId: string;
       accountName?: string;
     }>;
-    publishStrategy: string;
+    publishStrategy: 'immediate' | 'scheduled' | 'distributed';
     publishTimeSlots: string[];
+    articleDistribution: 'broadcast' | 'distribute';
   };
   stats: {
     totalCreated: number;
@@ -150,8 +154,20 @@ export class CreationScheduler {
   private apiBaseUrl: string;
   private intervalId: NodeJS.Timeout | null = null;
   private isRunning = false;
+  private isExecuting = false;  // 执行锁，防止并发执行
   private currentProgress: CreationProgress | null = null;
   private checkIntervalMs: number;
+  
+  // 智能调度相关属性
+  private nextCheckTimer: NodeJS.Timeout | null = null;  // 精确定时器
+  private nextRunTime: Date | null = null;               // 下次执行时间
+  private fallbackInterval: NodeJS.Timeout | null = null; // 兜底检查定时器
+  
+  // 多定时器管理：每个计划一个定时器
+  private scheduledTimers: Map<string, NodeJS.Timeout> = new Map();
+  private planExecutionTimes: Map<string, Date> = new Map();
+  private planNames: Map<string, string> = new Map();  // 存储 planId -> planName 映射
+  private lastRescheduleTime: Date | null = null;  // 上次重新调度时间
 
   constructor(mainWindow: BrowserWindow | null, apiBaseUrl: string, checkIntervalMs: number = 60000) {
     this.mainWindow = mainWindow;
@@ -167,7 +183,7 @@ export class CreationScheduler {
   }
 
   /**
-   * 启动调度器
+   * 启动调度器（智能调度模式）
    */
   start(): void {
     if (this.isRunning) {
@@ -175,51 +191,331 @@ export class CreationScheduler {
       return;
     }
 
-    console.log(`[CreationScheduler] 启动调度器，检查间隔: ${this.checkIntervalMs}ms`);
+    console.log(`[CreationScheduler] 启动智能调度器`);
     this.isRunning = true;
 
-    // 立即执行一次检查
-    this.checkAndExecute();
-
-    // 定时检查
-    this.intervalId = setInterval(() => {
-      this.checkAndExecute();
-    }, this.checkIntervalMs);
+    // 1. 立即加载所有计划并设置定时器
+    this.rescheduleAll();
+    
+    // 2. 启动兜底检查（每5分钟）
+    this.fallbackInterval = setInterval(() => {
+      this.healthCheck();
+    }, 5 * 60 * 1000);
 
     // 发送调度器启动通知
     this.sendToRenderer('creation-scheduler-status', { 
       status: 'running', 
-      checkInterval: this.checkIntervalMs 
+      checkInterval: this.checkIntervalMs,
+      mode: 'smart',
+      scheduledCount: this.scheduledTimers.size,
     });
+  }
+  
+  /**
+   * 添加单个计划的定时器
+   */
+  addPlanTimer(planId: string, planName: string, executeTime: Date): void {
+    // 如果该计划已有定时器，先清除（静默清除，不输出警告）
+    const existingTimer = this.scheduledTimers.get(planId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.scheduledTimers.delete(planId);
+      this.planExecutionTimes.delete(planId);
+      const existingPlanName = this.planNames.get(planId);
+      this.planNames.delete(planId);
+      console.log(`[CreationScheduler] 已覆盖旧定时器: ${existingPlanName || planId}`);
+    }
+    
+    const now = new Date();
+    const delay = Math.max(0, executeTime.getTime() - now.getTime());
+    
+    console.log(`[CreationScheduler] 添加计划定时器: ${planName} (${planId}), ${Math.round(delay/1000)}秒后执行`);
+    
+    // 存储执行时间和计划名称
+    this.planExecutionTimes.set(planId, executeTime);
+    this.planNames.set(planId, planName);
+    
+    // 设置定时器
+    const timer = setTimeout(() => {
+      this.executePlanById(planId, planName);
+    }, delay);
+    
+    this.scheduledTimers.set(planId, timer);
+    console.log(`[CreationScheduler] 定时器添加成功，当前共 ${this.scheduledTimers.size} 个定时器`);
+    
+    // 发送状态更新
+    this.sendToRenderer('creation-scheduler-updated', {
+      action: 'add',
+      planId,
+      planName,
+      executeTime: executeTime.toISOString(),
+      scheduledCount: this.scheduledTimers.size,
+    });
+  }
+
+  /**
+   * 移除单个计划的定时器
+   */
+  removePlanTimer(planId: string): boolean {
+    const timer = this.scheduledTimers.get(planId);
+    if (timer) {
+      clearTimeout(timer);
+      this.scheduledTimers.delete(planId);
+      this.planExecutionTimes.delete(planId);
+      const planName = this.planNames.get(planId);
+      this.planNames.delete(planId);
+      console.log(`[CreationScheduler] 已移除计划定时器: ${planName || planId}`);
+      
+      // 发送状态更新
+      this.sendToRenderer('creation-scheduler-updated', {
+        action: 'remove',
+        planId,
+        planName,
+        scheduledCount: this.scheduledTimers.size,
+      });
+      
+      return true;
+    }
+    
+    // 定时器不存在，输出警告帮助诊断
+    const scheduledIds = Array.from(this.scheduledTimers.keys());
+    console.warn(`[CreationScheduler] 移除定时器失败: 计划 ${planId} 不存在于调度器中`);
+    console.warn(`[CreationScheduler] 当前已调度的计划: ${scheduledIds.length > 0 ? scheduledIds.join(', ') : '无'}`);
+    
+    return false;
+  }
+
+  /**
+   * 重新调度所有计划（从数据库重新加载）
+   */
+  async rescheduleAll(): Promise<void> {
+    console.log('[CreationScheduler] 重新调度所有计划');
+    
+    // 1. 清除所有现有定时器
+    this.scheduledTimers.forEach((timer, planId) => {
+      clearTimeout(timer);
+    });
+    this.scheduledTimers.clear();
+    this.planExecutionTimes.clear();
+    this.planNames.clear();
+    
+    try {
+      // 2. 查询所有活跃计划
+      const result = await this.fetchWithRetry('/api/creation-plans/all-active', {
+        method: 'GET',
+        timeout: 10000,
+      });
+      
+      if (result.success && result.data?.plans) {
+        // 3. 为每个计划设置定时器
+        for (const plan of result.data.plans) {
+          if (plan.nextExecutionTime) {
+            this.addPlanTimer(plan.id, plan.planName, new Date(plan.nextExecutionTime));
+          }
+        }
+      }
+      
+      this.lastRescheduleTime = new Date();
+      console.log(`[CreationScheduler] 已调度 ${this.scheduledTimers.size} 个计划`);
+      
+      // 发送状态更新
+      this.sendToRenderer('creation-scheduler-updated', {
+        action: 'rescheduleAll',
+        scheduledCount: this.scheduledTimers.size,
+        plans: this.getScheduledPlans(),
+      });
+      
+    } catch (error) {
+      console.error('[CreationScheduler] 重新调度失败:', error);
+    }
+  }
+
+  /**
+   * 执行指定计划
+   */
+  private async executePlanById(planId: string, planName: string): Promise<void> {
+    console.log(`[CreationScheduler] 定时器触发，执行计划: ${planName} (${planId})`);
+    
+    // 执行时清理定时器
+    this.scheduledTimers.delete(planId);
+    this.planExecutionTimes.delete(planId);
+    
+    // 获取计划详情并执行
+    try {
+      const result = await this.fetchWithRetry(`/api/creation-plans?id=${planId}`, {
+        method: 'GET',
+        timeout: 10000,
+      });
+      
+      if (result.success && result.data?.success && result.data?.data) {
+        await this.executePlan(result.data.data);
+      } else {
+        console.error(`[CreationScheduler] 获取计划详情失败: ${planId}`, result.data);
+      }
+    } catch (error) {
+      console.error(`[CreationScheduler] 执行计划异常: ${planId}`, error);
+    }
+  }
+
+  /**
+   * 获取调度状态（供前端查看）
+   */
+  getScheduledPlans(): Array<{ planId: string; planName: string; executeTime: string }> {
+    return Array.from(this.scheduledTimers.keys()).map(planId => ({
+      planId,
+      planName: this.planNames.get(planId) || 'unknown',
+      executeTime: this.planExecutionTimes.get(planId)?.toISOString() || '',
+    }));
+  }
+  
+  /**
+   * 获取调度器详细状态
+   */
+  getStatus(): { 
+    isRunning: boolean; 
+    currentProgress: CreationProgress | null;
+    scheduledCount: number;
+    lastRescheduleTime: string | null;
+  } {
+    return {
+      isRunning: this.isRunning,
+      currentProgress: this.currentProgress,
+      scheduledCount: this.scheduledTimers.size,
+      lastRescheduleTime: this.lastRescheduleTime?.toISOString() || null,
+    };
+  }
+
+  /**
+   * 智能调度：根据计划的执行时间设置定时器
+   */
+  private async scheduleNextCheck(): Promise<void> {
+    // 清除现有定时器
+    if (this.nextCheckTimer) {
+      clearTimeout(this.nextCheckTimer);
+      this.nextCheckTimer = null;
+    }
+
+    // 利用内存状态判断是否需要延迟调度
+    if (this.currentProgress && ['creating', 'publishing'].includes(this.currentProgress.status)) {
+      console.log('[CreationScheduler] 正在执行中，延迟调度');
+      this.nextCheckTimer = setTimeout(() => this.scheduleNextCheck(), 60 * 1000);
+      return;
+    }
+
+    try {
+      // 查询最近的待执行计划
+      const result = await this.findEarliestPlan();
+      
+      if (!result || !result.plan) {
+        // 无计划，5分钟后重试
+        console.log('[CreationScheduler] 无待执行计划，5分钟后重试');
+        this.nextRunTime = null;
+        this.nextCheckTimer = setTimeout(() => this.scheduleNextCheck(), 5 * 60 * 1000);
+        return;
+      }
+
+      const nextPlan = result.plan;
+      const nextTime = new Date(nextPlan.nextExecutionTime);
+      const now = new Date();
+      const delay = Math.max(0, nextTime.getTime() - now.getTime());
+
+      this.nextRunTime = nextTime;
+      console.log(`[CreationScheduler] 下次执行: ${nextPlan.planName}, ${Math.round(delay / 1000)}秒后`);
+
+      // 设置精确定时器
+      this.nextCheckTimer = setTimeout(() => {
+        this.checkAndExecute();
+      }, delay);
+      
+    } catch (error) {
+      console.error('[CreationScheduler] 智能调度失败:', error);
+      // 失败时回退到固定间隔
+      this.nextCheckTimer = setTimeout(() => this.scheduleNextCheck(), 60 * 1000);
+    }
+  }
+
+  /**
+   * 查询最近的待执行计划
+   */
+  private async findEarliestPlan(): Promise<{ plan: any } | null> {
+    const result = await this.fetchWithRetry('/api/creation-plans/earliest', {
+      method: 'GET',
+      timeout: 10000,
+    });
+    
+    if (result.success && result.data) {
+      return result.data;
+    }
+    
+    return null;
+  }
+
+  /**
+   * 健康检查：确保定时器正常工作，并定期重新加载计划
+   */
+  private healthCheck(): void {
+    const now = new Date();
+    
+    // 1. 检查是否有定时器
+    if (this.scheduledTimers.size === 0) {
+      console.warn('[CreationScheduler] 健康检查：无活动定时器，重新调度');
+      this.rescheduleAll();
+      return;
+    }
+    
+    // 2. 定期重新调度（每2分钟检查一次数据库变化）
+    if (!this.lastRescheduleTime || 
+        now.getTime() - this.lastRescheduleTime.getTime() > 2 * 60 * 1000) {
+      console.log('[CreationScheduler] 健康检查：定期重新调度');
+      this.rescheduleAll();
+    }
   }
 
   /**
    * 停止调度器
    */
   stop(): void {
+    // 清理所有计划定时器
+    this.scheduledTimers.forEach((timer, planId) => {
+      clearTimeout(timer);
+    });
+    this.scheduledTimers.clear();
+    this.planExecutionTimes.clear();
+    this.planNames.clear();
+    
+    // 清理智能调度定时器
+    if (this.nextCheckTimer) {
+      clearTimeout(this.nextCheckTimer);
+      this.nextCheckTimer = null;
+    }
+    
+    // 清理兜底检查定时器
+    if (this.fallbackInterval) {
+      clearInterval(this.fallbackInterval);
+      this.fallbackInterval = null;
+    }
+    
+    // 清理旧的轮询定时器（兼容）
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
+    
     this.isRunning = false;
+    this.nextRunTime = null;
+    this.lastRescheduleTime = null;
     console.log('[CreationScheduler] 调度器已停止');
 
-    this.sendToRenderer('creation-scheduler-status', { status: 'stopped' });
-  }
-
-  /**
-   * 获取调度器状态
-   */
-  getStatus(): { isRunning: boolean; currentProgress: CreationProgress | null } {
-    return {
-      isRunning: this.isRunning,
-      currentProgress: this.currentProgress,
-    };
+    this.sendToRenderer('creation-scheduler-status', { 
+      status: 'stopped',
+      scheduledCount: 0,
+    });
   }
 
   /**
    * 带重试的 HTTP 请求
    * 用于提高网络抖动或临时不可用情况下的稳定性
+   * 自动从主窗口 session 获取认证 cookie
    */
   private async fetchWithRetry(
     urlPath: string,
@@ -233,6 +529,21 @@ export class CreationScheduler {
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     const { maxRetries = 3, retryDelay = 2000, timeout = 30000, method = 'GET', body } = options;
     let lastError: string = '';
+    
+    // 从主窗口 session 获取认证 cookie
+    let cookieHeader = '';
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      try {
+        const mainSession = this.mainWindow.webContents.session;
+        const cookies = await mainSession.cookies.get({});
+        const userToken = cookies.find(c => c.name === 'user_token');
+        if (userToken) {
+          cookieHeader = `user_token=${userToken.value}`;
+        }
+      } catch (e) {
+        console.warn('[CreationScheduler] 获取认证 cookie 失败:', e);
+      }
+    }
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
@@ -248,6 +559,7 @@ export class CreationScheduler {
             method,
             headers: {
               'Content-Type': 'application/json',
+              ...(cookieHeader ? { 'Cookie': cookieHeader } : {}),
               ...(body ? { 'Content-Length': Buffer.byteLength(JSON.stringify(body)) } : {}),
             },
           };
@@ -313,11 +625,26 @@ export class CreationScheduler {
 
   /**
    * 检查并执行待执行计划
-   * 注意：调度器独立于窗口运行，主窗口仅用于发送通知
+   * 优化版本：利用内存状态跳过无效查询，支持多计划顺序执行
    */
   private async checkAndExecute(): Promise<void> {
-    // 移除主窗口检查，调度器应独立运行
-    // 主窗口用于发送通知，不是必需的
+    // 第1层：利用内存进度状态跳过数据库查询
+    if (this.currentProgress) {
+      const { status } = this.currentProgress;
+      if (status === 'creating' || status === 'publishing') {
+        console.log(`[CreationScheduler] 正在执行中 (${status})，跳过数据库查询`);
+        return;
+      }
+    }
+    
+    // 第2层：执行锁检查：如果已经在执行中，跳过本次检查
+    if (this.isExecuting) {
+      console.log('[CreationScheduler] 已有执行任务在进行中，跳过本次检查');
+      return;
+    }
+    
+    // 设置执行锁
+    this.isExecuting = true;
 
     try {
       // 发送检查开始通知
@@ -345,15 +672,31 @@ export class CreationScheduler {
         }))
       });
 
-      // 执行第一个计划
-      const plan = pendingPlans[0];
-      await this.executePlan(plan);
+      // 执行所有待执行计划（顺序执行）
+      for (let i = 0; i < pendingPlans.length; i++) {
+        const plan = pendingPlans[i];
+        console.log(`[CreationScheduler] 执行计划 ${i + 1}/${pendingPlans.length}: ${plan.planName}`);
+        await this.executePlan(plan);
+        
+        // 计划之间间隔一段时间，避免资源竞争
+        if (i < pendingPlans.length - 1) {
+          console.log('[CreationScheduler] 等待 5 秒后执行下一个计划...');
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+      }
 
     } catch (error) {
       console.error('[CreationScheduler] 检查计划失败:', error);
       this.sendToRenderer('creation-scheduler-error', { 
         error: error instanceof Error ? error.message : '检查计划失败' 
       });
+    } finally {
+      // 释放执行锁
+      this.isExecuting = false;
+      console.log('[CreationScheduler] 执行完成，释放锁');
+      
+      // 执行完成后重新调度
+      await this.scheduleNextCheck();
     }
   }
 
@@ -379,6 +722,12 @@ export class CreationScheduler {
    */
   private async executePlan(plan: CreationPlan): Promise<void> {
     console.log(`[CreationScheduler] 开始执行计划: ${plan.planName} (${plan.id})`);
+
+    // ✅ 执行开始时立即更新 last_run_at，防止重复调度
+    // 在数据库层面标记该计划正在执行，避免因执行时间超过调度间隔导致重复触发
+    await this.updatePlanStats(plan.id, {
+      lastRunAt: new Date().toISOString(),
+    });
 
     // 初始化进度
     this.currentProgress = {
@@ -412,11 +761,21 @@ export class CreationScheduler {
       const startIndex = plan.lastKeywordIndex || 0;
       console.log(`[CreationScheduler] 关键词总数: ${keywords.length}, 起始索引: ${startIndex}, 每次生成: ${plan.articlesPerRun}`);
       
+      // 收集所有生成的文章，用于分发策略
+      const generatedArticles: Array<{
+        draftId: string;
+        title: string;
+        content: string;
+      }> = [];
+      
       // 3. 为每个关键词创建创作任务
       for (let i = 0; i < plan.articlesPerRun; i++) {
         // 循环使用关键词
         const keywordIndex = (startIndex + i) % keywords.length;
         const keyword = keywords[keywordIndex];
+        
+        // 根据模型选择模式选择要使用的模型
+        const selectedModel = this.selectModel(plan.contentConfig, i);
         
         this.currentProgress.currentTask = keyword;
         this.currentProgress.progress = Math.round(((i + 1) / plan.articlesPerRun) * 50);
@@ -428,10 +787,11 @@ export class CreationScheduler {
           keyword,
           keywordIndex: keywordIndex + 1,
           totalKeywords: keywords.length,
+          selectedModel,
         });
 
-        // 调用API生成内容
-        const result = await this.generateContent(plan, keyword);
+        // 调用API生成内容（传入选中的模型）
+        const result = await this.generateContent(plan, keyword, selectedModel);
         
         if (result.success) {
           this.currentProgress.createdCount++;
@@ -439,10 +799,10 @@ export class CreationScheduler {
             title: result.title || '生成成功',
             status: 'success',
           });
-
-          // 4. 如果配置了自动发布，创建发布任务
-          if (plan.publishConfig.autoPublish && result.draftId && result.title && result.content) {
-            await this.createPublishTask(plan, {
+          
+          // 收集生成的文章
+          if (result.draftId && result.title && result.content) {
+            generatedArticles.push({
               draftId: result.draftId,
               title: result.title,
               content: result.content,
@@ -455,6 +815,11 @@ export class CreationScheduler {
             error: result.error,
           });
         }
+      }
+      
+      // 4. 根据分发策略创建发布任务
+      if (plan.publishConfig.autoPublish && generatedArticles.length > 0) {
+        await this.createPublishTasksWithDistribution(plan, generatedArticles);
       }
 
       // 5. 更新关键词进度索引（循环）
@@ -480,8 +845,9 @@ export class CreationScheduler {
       });
 
       // 更新计划的运行时间、关键词进度和下次执行时间
+      // 注意：totalCreated 只传入本次创建的数量，由 API 负责累加
       await this.updatePlanStats(plan.id, {
-        totalCreated: plan.stats.totalCreated + this.currentProgress.createdCount,
+        totalCreated: this.currentProgress.createdCount,
         lastRunAt: new Date().toISOString(),
         lastKeywordIndex: newKeywordIndex,
         nextRunAt: nextRunAt.toISOString(),
@@ -492,6 +858,12 @@ export class CreationScheduler {
 
       this.currentProgress.status = 'failed';
       this.currentProgress.completedAt = new Date();
+
+      // 失败时也更新 next_run_at，确保下次能正确调度
+      const nextRunAt = this.calculateNextRunAt(plan);
+      await this.updatePlanStats(plan.id, {
+        nextRunAt: nextRunAt.toISOString(),
+      });
 
       this.sendToRenderer('creation-plan-failed', {
         planId: plan.id,
@@ -525,13 +897,13 @@ export class CreationScheduler {
    * 从关键词库获取关键词（带重试）
    */
   private async fetchKeywordsFromLibrary(libraryId: string): Promise<string[]> {
-    const result = await this.fetchWithRetry(`/api/keywords/${libraryId}`, {
+    const result = await this.fetchWithRetry(`/api/keywords?id=${libraryId}`, {
       method: 'GET',
       timeout: 5000,
     });
     
     if (result.success && result.data) {
-      return result.data.keywords?.map((k: any) => k.word || k) || [];
+      return result.data.library?.keywords?.map((k: any) => k.word || k) || [];
     }
     
     return [];
@@ -543,7 +915,8 @@ export class CreationScheduler {
    */
   private async generateContent(
     plan: CreationPlan, 
-    keyword: string
+    keyword: string,
+    selectedModel?: string
   ): Promise<{ success: boolean; draftId?: string; title?: string; content?: string; seoScore?: number; error?: string }> {
     const result = await this.fetchWithRetry('/api/content/generate', {
       method: 'POST',
@@ -551,7 +924,11 @@ export class CreationScheduler {
         businessId: plan.businessId,
         planId: plan.id,
         keyword, // 当前处理的关键词
-        config: plan.contentConfig, // 完整的 GenerationConfig
+        config: {
+          ...plan.contentConfig,
+          // 使用选中的模型覆盖配置中的模型
+          model: selectedModel || plan.contentConfig.model,
+        }, // 完整的 GenerationConfig
         ruleId: plan.contentConfig.ruleId,
       },
       timeout: 120000, // 2分钟超时（内容生成需要较长时间）
@@ -594,33 +971,332 @@ export class CreationScheduler {
   }
 
   /**
+   * 根据模型选择模式获取要使用的模型
+   * 
+   * @param config 内容配置
+   * @param articleIndex 文章索引（用于随机模式的一致性）
+   * @returns 模型ID
+   */
+  private selectModel(
+    config: {
+      model: string;
+      modelSelectionMode?: ModelSelectionMode;
+      modelPool?: string[];
+      modelWeights?: Record<string, number>;
+    },
+    articleIndex?: number
+  ): string {
+    const { model, modelSelectionMode, modelPool, modelWeights } = config;
+    
+    switch (modelSelectionMode) {
+      case 'fixed':
+        // 固定模式：始终使用指定模型
+        return model;
+        
+      case 'random':
+        // 随机模式：从模型池随机选择
+        if (modelPool && modelPool.length > 0) {
+          const randomIndex = articleIndex !== undefined
+            ? (articleIndex + Math.floor(Math.random() * 1000)) % modelPool.length
+            : Math.floor(Math.random() * modelPool.length);
+          return modelPool[randomIndex];
+        }
+        return model;
+        
+      case 'weighted':
+        // 加权模式：按权重随机选择
+        if (modelWeights && Object.keys(modelWeights).length > 0) {
+          const entries = Object.entries(modelWeights);
+          const totalWeight = entries.reduce((sum, [, weight]) => sum + weight, 0);
+          let random = Math.random() * totalWeight;
+          
+          for (const [modelId, weight] of entries) {
+            random -= weight;
+            if (random <= 0) {
+              return modelId;
+            }
+          }
+          return entries[0][0];
+        }
+        return model;
+        
+      default:
+        // 默认使用固定模式
+        return model;
+    }
+  }
+
+  /**
+   * 计算发布时间（根据发布策略）
+   * @param plan 创作计划
+   * @param slotIndex 时间段索引（用于 distributed 策略的均衡分配）
+   */
+  private calculatePublishTime(plan: CreationPlan, slotIndex?: number): Date {
+    const { publishStrategy, publishDelay, publishTimeSlots } = plan.publishConfig;
+    const now = new Date();
+    
+    switch (publishStrategy) {
+      case 'immediate':
+        // 立即发布 + 可选延迟
+        return new Date(now.getTime() + publishDelay * 60 * 1000);
+        
+      case 'scheduled':
+        // 定时发布：使用第一个时间段
+        const scheduledTime = publishTimeSlots[0] || '09:00';
+        const [schedHour, schedMin] = scheduledTime.split(':').map(Number);
+        const scheduled = new Date(now);
+        scheduled.setHours(schedHour, schedMin, 0, 0);
+        // 如果已过今天的时间，推到明天
+        if (scheduled <= now) {
+          scheduled.setDate(scheduled.getDate() + 1);
+        }
+        return scheduled;
+        
+      case 'distributed':
+        // 分散发布：均衡轮换分配到时间段
+        const slots = publishTimeSlots.length > 0 ? publishTimeSlots : ['09:00', '12:00', '18:00'];
+        // 使用 slotIndex 进行均衡轮换，而非随机
+        const targetSlotIndex = slotIndex !== undefined ? slotIndex % slots.length : 0;
+        const targetSlot = slots[targetSlotIndex];
+        const [targetHour, targetMin] = targetSlot.split(':').map(Number);
+        const distributed = new Date(now);
+        distributed.setHours(targetHour, targetMin, 0, 0);
+        // 添加小幅度随机偏移（±15分钟），避免整点集中发布
+        distributed.setMinutes(distributed.getMinutes() + Math.floor(Math.random() * 30) - 15);
+        // 如果已过今天的时间，推到明天
+        if (distributed <= now) {
+          distributed.setDate(distributed.getDate() + 1);
+        }
+        return distributed;
+        
+      default:
+        // 默认：延迟发布
+        return new Date(now.getTime() + publishDelay * 60 * 1000);
+    }
+  }
+
+  /**
+   * 获取发布策略描述
+   */
+  private getPublishStrategyDesc(
+    publishStrategy: string, 
+    publishDelay: number, 
+    timeSlots: string[]
+  ): string {
+    switch (publishStrategy) {
+      case 'immediate':
+        return publishDelay > 0 
+          ? `延迟 ${publishDelay} 分钟后发布` 
+          : '立即发布';
+      case 'scheduled':
+        return `定时发布，计划 ${timeSlots[0] || '09:00'} 执行`;
+      case 'distributed':
+        return `分散发布，时间段 ${timeSlots.join('、')} 轮换`;
+      default:
+        return '发布';
+    }
+  }
+
+  /**
    * 创建发布任务（带重试）
+   * @param plan 创作计划
+   * @param content 文章内容
+   * @param targetPlatforms 目标平台（可选，默认使用计划中的全部）
+   * @param publishAt 发布时间（可选，默认根据策略计算）
    */
   private async createPublishTask(
     plan: CreationPlan, 
-    content: { draftId: string; title: string; content: string }
+    content: { draftId: string; title: string; content: string },
+    targetPlatforms?: Array<{ platform: string; accountId: string; accountName?: string }>,
+    publishAt?: Date
   ): Promise<void> {
-    // 计算发布时间
-    const publishAt = new Date(Date.now() + plan.publishConfig.publishDelay * 60 * 1000);
+    // 使用传入的目标平台，或使用计划中的全部平台
+    const platforms = targetPlatforms || plan.publishConfig.targetPlatforms;
+    
+    // 使用传入的发布时间，或根据策略计算
+    const scheduledTime = publishAt || this.calculatePublishTime(plan);
 
     const result = await this.fetchWithRetry('/api/publish-tasks', {
       method: 'POST',
       body: {
-        businessId: plan.businessId,
-        planId: plan.id,
-        draftId: content.draftId,
-        taskName: `自动发布: ${content.title}`,
-        taskType: 'scheduled',
-        title: content.title,
-        content: content.content,
-        targetPlatforms: plan.publishConfig.targetPlatforms,
-        scheduledAt: publishAt.toISOString(),
+        action: 'create',  // 必需：指定操作类型
+        data: {            // 必需：包装为 data 对象
+          businessId: plan.businessId,
+          planId: plan.id,
+          draftId: content.draftId,
+          taskName: `自动发布: ${content.title}`,
+          taskType: 'scheduled',
+          title: content.title,
+          content: content.content,
+          targetPlatforms: platforms,
+          scheduledAt: scheduledTime.toISOString(),
+        },
       },
       timeout: 10000,
     });
     
     if (!result.success) {
       console.error('[CreationScheduler] 创建发布任务失败:', result.error);
+    }
+  }
+
+  /**
+   * 根据文章分发策略和发布时间策略创建发布任务
+   * 
+   * 策略组合逻辑：
+   * - broadcast + distributed: 每篇文章发所有账号，时间轮换分配
+   * - distribute + distributed: 每篇文章发一个账号，账号和时间同步轮换（推荐）
+   * - broadcast + scheduled/immediate: 每篇文章发所有账号，统一时间
+   * - distribute + scheduled/immediate: 每篇文章发一个账号，统一时间
+   */
+  private async createPublishTasksWithDistribution(
+    plan: CreationPlan,
+    articles: Array<{ draftId: string; title: string; content: string }>
+  ): Promise<void> {
+    const { articleDistribution, targetPlatforms, publishStrategy, publishDelay, publishTimeSlots } = plan.publishConfig;
+    
+    if (targetPlatforms.length === 0) {
+      console.log('[CreationScheduler] 没有目标平台，跳过发布任务创建');
+      return;
+    }
+    
+    const timeSlots = publishTimeSlots.length > 0 ? publishTimeSlots : ['09:00', '12:00', '18:00'];
+    const totalArticles = articles.length;
+    
+    console.log(`[CreationScheduler] 创建发布任务，分发策略: ${articleDistribution}, 发布策略: ${publishStrategy}, 文章数: ${totalArticles}, 账号数: ${targetPlatforms.length}, 时间段数: ${timeSlots.length}`);
+    
+    // 发送发布开始通知
+    this.sendToRenderer('publish-task-progress', {
+      planId: plan.id,
+      taskId: '',
+      current: 0,
+      total: totalArticles,
+      status: 'pending',
+      message: `准备创建 ${totalArticles} 个发布任务...`,
+    });
+    
+    let createdCount = 0;
+    
+    switch (articleDistribution) {
+      case 'broadcast':
+        // 广播模式：每篇文章发布到所有账号
+        for (let i = 0; i < articles.length; i++) {
+          // 时间分配：均衡轮换
+          const slotIndex = i % timeSlots.length;
+          const publishAt = this.calculatePublishTime(plan, slotIndex);
+          
+          // 发送发布进度通知
+          this.sendToRenderer('publish-task-progress', {
+            planId: plan.id,
+            taskId: '',
+            current: i + 1,
+            total: totalArticles,
+            articleTitle: articles[i].title,
+            status: 'pending',
+            message: `正在创建发布任务 ${i + 1}/${totalArticles}...`,
+          });
+          
+          await this.createPublishTask(plan, articles[i], targetPlatforms, publishAt);
+          createdCount++;
+        }
+        console.log(`[CreationScheduler] 广播模式：创建了 ${articles.length} 个发布任务，每个任务发到 ${targetPlatforms.length} 个账号，${this.getPublishStrategyDesc(publishStrategy, publishDelay, timeSlots)}`);
+        break;
+        
+      case 'distribute':
+        // 分发模式：每篇文章只发布到一个账号，账号和时间同步轮换
+        for (let i = 0; i < articles.length; i++) {
+          // 账号分配：均衡轮换
+          const platformIndex = i % targetPlatforms.length;
+          const platform = targetPlatforms[platformIndex];
+          
+          // 时间分配：同步均衡轮换（账号和时间一一对应）
+          const slotIndex = i % timeSlots.length;
+          const publishAt = this.calculatePublishTime(plan, slotIndex);
+          
+          // 发送发布进度通知
+          this.sendToRenderer('publish-task-progress', {
+            planId: plan.id,
+            taskId: '',
+            current: i + 1,
+            total: totalArticles,
+            articleTitle: articles[i].title,
+            platform: platform.platform,
+            status: 'pending',
+            message: `正在创建发布任务 ${i + 1}/${totalArticles} -> ${platform.platform}...`,
+          });
+          
+          await this.createPublishTask(plan, articles[i], [platform], publishAt);
+          createdCount++;
+        }
+        console.log(`[CreationScheduler] 分发模式：创建了 ${articles.length} 个发布任务，账号均衡分配到 ${targetPlatforms.length} 个账号，${this.getPublishStrategyDesc(publishStrategy, publishDelay, timeSlots)}`);
+        break;
+        
+      default:
+        // 默认使用广播模式
+        for (let i = 0; i < articles.length; i++) {
+          const slotIndex = i % timeSlots.length;
+          const publishAt = this.calculatePublishTime(plan, slotIndex);
+          
+          // 发送发布进度通知
+          this.sendToRenderer('publish-task-progress', {
+            planId: plan.id,
+            taskId: '',
+            current: i + 1,
+            total: totalArticles,
+            articleTitle: articles[i].title,
+            status: 'pending',
+            message: `正在创建发布任务 ${i + 1}/${totalArticles}...`,
+          });
+          
+          await this.createPublishTask(plan, articles[i], targetPlatforms, publishAt);
+          createdCount++;
+        }
+    }
+    
+    // 发送发布任务创建完成通知
+    const publishMessage = publishStrategy === 'immediate' 
+      ? `发布任务创建完成，正在等待发布调度器执行...`
+      : publishStrategy === 'scheduled' || publishStrategy === 'distributed'
+      ? `发布任务已安排至 ${timeSlots.join('、')} 执行`
+      : `发布任务创建完成`;
+    
+    this.sendToRenderer('publish-task-progress', {
+      planId: plan.id,
+      taskId: '',
+      current: createdCount,
+      total: totalArticles,
+      status: 'completed',
+      message: publishMessage,
+    });
+    
+    // 通知发布调度器重新调度（如果有新任务创建）
+    if (createdCount > 0) {
+      this.notifyPublishScheduler();
+    }
+  }
+
+  /**
+   * 通知发布调度器有新任务
+   */
+  private async notifyPublishScheduler(): Promise<void> {
+    try {
+      // 通过 API 获取发布调度器的重新调度接口
+      const result = await this.fetchWithRetry('/api/publish-tasks?action=earliest');
+      
+      // 动态导入发布调度器模块并获取实例
+      const { getPublishScheduler } = await import('./publish-scheduler');
+      const publishScheduler = getPublishScheduler();
+      
+      if (publishScheduler) {
+        console.log('[CreationScheduler] 通知发布调度器重新调度');
+        // 调用发布调度器的重新调度方法
+        if (result.success && result.data) {
+          // 如果有最早的任务，立即重新调度
+          publishScheduler.rescheduleAll();
+        }
+      }
+    } catch (error) {
+      console.warn('[CreationScheduler] 通知发布调度器失败:', error);
     }
   }
 
@@ -670,6 +1346,8 @@ export class CreationScheduler {
     planId: string, 
     stats: { totalCreated?: number; lastRunAt?: string; lastKeywordIndex?: number; nextRunAt?: string }
   ): Promise<void> {
+    console.log('[CreationScheduler] 更新计划统计:', { planId, stats });
+    
     const result = await this.fetchWithRetry(`/api/creation-plans/${planId}/stats`, {
       method: 'PATCH',
       body: stats,
@@ -678,6 +1356,8 @@ export class CreationScheduler {
     
     if (!result.success) {
       console.error('[CreationScheduler] 更新计划统计失败:', result.error);
+    } else {
+      console.log('[CreationScheduler] 更新计划统计成功');
     }
   }
 

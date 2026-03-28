@@ -11,7 +11,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Clock, Plus, X } from 'lucide-react';
+import { Clock, Plus, X, Radio, Share2 } from 'lucide-react';
+import type { ArticleDistributionStrategy } from '@/lib/creation-plan-store';
 
 interface PublishStrategyConfigProps {
   value: {
@@ -19,9 +20,11 @@ interface PublishStrategyConfigProps {
     publishDelay: number;
     publishStrategy: 'immediate' | 'scheduled' | 'distributed';
     publishTimeSlots: string[];
+    articleDistribution: ArticleDistributionStrategy;
   };
   onChange: (value: PublishStrategyConfigProps['value']) => void;
   disabled?: boolean;
+  accountCount?: number;  // 已选账号数量，用于显示提示
 }
 
 const strategyOptions = [
@@ -42,13 +45,35 @@ const strategyOptions = [
   },
 ];
 
+const distributionOptions = [
+  { 
+    value: 'broadcast', 
+    label: '广播模式', 
+    description: '每篇文章发布到所有账号',
+    icon: Radio,
+    example: '例：10篇文章 × 3账号 = 30次发布'
+  },
+  { 
+    value: 'distribute', 
+    label: '分发模式', 
+    description: '每篇文章只发布到一个账号，轮换分配',
+    icon: Share2,
+    example: '例：10篇文章 × 3账号 = 10次发布（每账号约3-4篇）'
+  },
+];
+
 /**
  * 发布策略配置组件
+ * 
+ * 包含两部分：
+ * 1. 发布时间策略：immediate/scheduled/distributed
+ * 2. 文章分发策略：broadcast/distribute
  */
 export function PublishStrategyConfig({
   value,
   onChange,
   disabled,
+  accountCount = 0,
 }: PublishStrategyConfigProps) {
   // 添加时间段
   const addTimeSlot = () => {
@@ -77,10 +102,90 @@ export function PublishStrategyConfig({
   };
 
   return (
-    <div className="space-y-4">
-      {/* 发布策略选择 */}
-      <div className="space-y-2">
-        <Label>发布策略</Label>
+    <div className="space-y-6">
+      {/* 文章分发策略 */}
+      <div className="space-y-3">
+        <Label className="text-base font-medium">文章分发策略</Label>
+        <p className="text-sm text-muted-foreground">
+          决定文章如何分配到各账号
+        </p>
+        
+        <div className="grid gap-3">
+          {distributionOptions.map((option) => {
+            const Icon = option.icon;
+            const isSelected = value.articleDistribution === option.value;
+            
+            return (
+              <div
+                key={option.value}
+                onClick={() => !disabled && onChange({ 
+                  ...value, 
+                  articleDistribution: option.value as ArticleDistributionStrategy 
+                })}
+                className={`
+                  relative flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all
+                  ${isSelected 
+                    ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20' 
+                    : 'border-gray-200 hover:border-gray-300 dark:border-gray-700'
+                  }
+                  ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
+                `}
+              >
+                <div className={`
+                  w-10 h-10 rounded-lg flex items-center justify-center shrink-0
+                  ${isSelected ? 'bg-purple-500 text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-500'}
+                `}>
+                  <Icon className="h-5 w-5" />
+                </div>
+                
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{option.label}</span>
+                    {isSelected && (
+                      <Badge variant="secondary" className="text-xs bg-purple-100 text-purple-700">
+                        已选择
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-0.5">
+                    {option.description}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {option.example}
+                  </p>
+                </div>
+                
+                {isSelected && (
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                    <div className="w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center">
+                      <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        
+        {accountCount > 1 && value.articleDistribution === 'broadcast' && (
+          <p className="text-xs text-amber-600 bg-amber-50 dark:bg-amber-900/20 p-2 rounded">
+            广播模式下，每篇文章将发布到所有 {accountCount} 个账号
+          </p>
+        )}
+      </div>
+
+      {/* 分隔线 */}
+      <div className="border-t" />
+
+      {/* 发布时间策略 */}
+      <div className="space-y-3">
+        <Label className="text-base font-medium">发布时间策略</Label>
+        <p className="text-sm text-muted-foreground">
+          决定文章发布的时机
+        </p>
+        
         <Select
           value={value.publishStrategy}
           onValueChange={(v: 'immediate' | 'scheduled' | 'distributed') => 

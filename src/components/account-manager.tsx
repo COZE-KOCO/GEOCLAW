@@ -97,7 +97,9 @@ interface AccountManagerProps {
 }
 
 // 平台信息（包含OAuth支持状态）- 使用真实图标
+// 包含传统自媒体平台 + GEO采集平台
 const platformInfo: Record<string, { name: string; icon: string; color: string; supportsOAuth: boolean }> = {
+  // ========== 传统自媒体平台 ==========
   wechat: { 
     name: '微信公众号', 
     icon: 'https://api.iconify.design/simple-icons/wechat.svg?color=%2307c160', 
@@ -140,11 +142,42 @@ const platformInfo: Record<string, { name: string; icon: string; color: string; 
     color: '#000000', 
     supportsOAuth: true 
   },
+  // ========== GEO采集平台 ==========
+  sohu: { 
+    name: '搜狐号', 
+    icon: 'https://api.iconify.design/simple-icons/sohu.svg?color=%23ff6600', 
+    color: '#ff6600', 
+    supportsOAuth: true 
+  },
+  wangyi: { 
+    name: '网易号', 
+    icon: 'https://api.iconify.design/simple-icons/netease.svg?color=%23d43c33', 
+    color: '#d43c33', 
+    supportsOAuth: true 
+  },
+  tencent: { 
+    name: '腾讯网', 
+    icon: 'https://api.iconify.design/simple-icons/tencentqq.svg?color=%2312b7f5', 
+    color: '#12b7f5', 
+    supportsOAuth: true 
+  },
+  baike: { 
+    name: '百度百科', 
+    icon: 'https://api.iconify.design/simple-icons/baidu.svg?color=%232932e1', 
+    color: '#2932e1', 
+    supportsOAuth: false 
+  },
   baijiahao: { 
     name: '百家号', 
     icon: 'https://api.iconify.design/simple-icons/baidu.svg?color=%232932e1', 
     color: '#2932e1', 
-    supportsOAuth: false 
+    supportsOAuth: true 
+  },
+  smzdm: { 
+    name: '什么值得买', 
+    icon: 'https://api.iconify.design/simple-icons/shenmemezhide.svg?color=%23e31436', 
+    color: '#e31436', 
+    supportsOAuth: true 
   },
 };
 

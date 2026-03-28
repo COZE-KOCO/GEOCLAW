@@ -2,9 +2,9 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "CommonJS",
-    "lib": ["ES2020"],
+    "lib": ["ES2020", "DOM"],
     "outDir": "./dist/electron",
-    "rootDir": "./electron",
+    "rootDirs": ["./electron", "./src"],
     "strict": false,
     "noImplicitAny": false,
     "esModuleInterop": true,
@@ -13,8 +13,12 @@
     "resolveJsonModule": true,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
   },
-  "include": ["electron/**/*"],
+  "include": ["electron/**/*", "src/lib/types/**/*"],
   "exclude": ["node_modules", "dist"]
 }

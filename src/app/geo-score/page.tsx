@@ -9,18 +9,64 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { AppLayout } from '@/components/app-layout';
+import { EnhancedScoreDisplay } from '@/components/enhanced-score-display';
 import { 
   FileText, 
   Sparkles, 
   TrendingUp,
   Target,
   Brain,
+  Heart,
   CheckCircle2,
   AlertCircle,
   Lightbulb,
   Zap,
+  Shield,
+  Quote,
+  Database,
+  Share2,
+  Search,
 } from 'lucide-react';
-import { calculateGEOScore, getGrade, type ContentAnalysis } from '@/lib/geo-scoring';
+import { calculateGEOScore, getGrade, type ContentAnalysisUnified, DIMENSION_CONFIG } from '@/lib/geo-scoring-unified';
+
+// 维度图标映射
+const dimensionIcons: Record<string, React.ComponentType<{ className?: string }>> = {
+  problemOriented: Target,
+  aiRecognition: Brain,
+  humanizedExpression: Heart,
+  contentQuality: FileText,
+  trustAuthority: Shield,
+  preciseCitation: Quote,
+  structuredData: Database,
+  multiPlatform: Share2,
+  seoKeywords: Search,
+};
+
+// 维度颜色映射
+const dimensionColors: Record<string, string> = {
+  problemOriented: 'text-blue-500',
+  aiRecognition: 'text-purple-500',
+  humanizedExpression: 'text-pink-500',
+  contentQuality: 'text-green-500',
+  trustAuthority: 'text-amber-500',
+  preciseCitation: 'text-indigo-500',
+  structuredData: 'text-cyan-500',
+  multiPlatform: 'text-teal-500',
+  seoKeywords: 'text-orange-500',
+};
+
+// 维度中文名映射
+const dimensionNames: Record<string, string> = {
+  problemOriented: '问题导向',
+  aiRecognition: 'AI识别友好',
+  humanizedExpression: '人性化表达',
+  contentQuality: '内容质量',
+  trustAuthority: '信任权威',
+  preciseCitation: '精准引用',
+  structuredData: '结构化数据',
+  multiPlatform: '多平台适配',
+  seoKeywords: 'SEO关键词',
+};
 
 export default function GEOScorePage() {
   const [content, setContent] = useState('');
@@ -30,7 +76,7 @@ export default function GEOScorePage() {
   const [score, setScore] = useState<any>(null);
 
   // 分析内容
-  const analysis: ContentAnalysis = useMemo(() => {
+  const analysis: ContentAnalysisUnified = useMemo(() => {
     return {
       title,
       content,
@@ -38,6 +84,7 @@ export default function GEOScorePage() {
       references: [],
       hasSchema: content.includes('application/ld+json'),
       hasFAQ: content.includes('常见问题') || content.includes('FAQ'),
+      hasImages: content.includes('![图片') || content.includes('<img'),
       wordCount: content.length,
     };
   }, [content, title, keywords]);
@@ -73,6 +120,11 @@ export default function GEOScorePage() {
       setScore({
         score: geoScore,
         grade,
+        platformSuggestions: {
+          primary: ['知乎专栏', '百度百家号'],
+          secondary: ['今日头条', '微信公众号'],
+          reasons: ['多平台分发可提升内容曝光率'],
+        },
       });
     } finally {
       setAnalyzing(false);
@@ -86,10 +138,10 @@ export default function GEOScorePage() {
         <div className="mb-6">
           <h1 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
             <Target className="h-6 w-6 text-purple-500" />
-            GEO评分
+            GEO评分（统一版）
           </h1>
           <p className="text-slate-500 dark:text-slate-400 mt-1">
-            分析内容质量，获取AI搜索引擎引用率预测
+            分析内容质量，获取AI搜索引擎引用率预测 - 九维度统一评分体系
           </p>
         </div>
 
@@ -181,6 +233,11 @@ export default function GEOScorePage() {
                       <p className="mt-3 text-blue-100">
                         {score.grade?.description || '优秀内容，预计AI引用率较高'}
                       </p>
+                      {score.grade?.aiReferenceRate && (
+                        <p className="mt-2 text-white/80 text-sm">
+                          预测AI引用率：{score.grade.aiReferenceRate}
+                        </p>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -188,51 +245,99 @@ export default function GEOScorePage() {
                 {/* 评分维度 */}
                 <Card className="bg-white dark:bg-gray-800">
                   <CardHeader>
-                    <CardTitle className="text-lg">评分维度</CardTitle>
+                    <CardTitle className="text-lg">九维度评分详情</CardTitle>
+                    <CardDescription>合并V1和V2优势的统一评分体系</CardDescription>
                   </CardHeader>
-                  <CardContent className="space-y-4">
-                    {[
-                      { label: '人性化GEO', value: score.score?.breakdown?.humanizedGeo || 8.5, icon: Brain },
-                      { label: '交叉验证', value: score.score?.breakdown?.crossValidation || 7.8, icon: CheckCircle2 },
-                      { label: 'E-E-A-T', value: score.score?.breakdown?.eeat || 8.2, icon: Target },
-                      { label: '精准引用', value: score.score?.breakdown?.preciseCitation || 7.5, icon: FileText },
-                      { label: '结构化内容', value: score.score?.breakdown?.structuredContent || 8.0, icon: TrendingUp },
-                      { label: 'SEO关键词', value: score.score?.breakdown?.seoKeywords || 7.8, icon: Sparkles },
-                    ].map((item) => (
-                      <div key={item.label} className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <item.icon className="h-4 w-4 text-gray-400" />
-                            <span className="text-sm text-gray-600 dark:text-gray-300">{item.label}</span>
+                  <CardContent className="space-y-3">
+                    {score.score?.breakdown && Object.entries(score.score.breakdown).map(([key, value]) => {
+                      const config = DIMENSION_CONFIG[key as keyof typeof DIMENSION_CONFIG];
+                      if (!config) return null;
+                      
+                      const Icon = dimensionIcons[key] || Target;
+                      const colorClass = dimensionColors[key] || 'text-gray-500';
+                      const percentage = ((value as number) / config.max) * 100;
+
+                      return (
+                        <div key={key} className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Icon className={`h-4 w-4 ${colorClass}`} />
+                              <span className="text-sm text-gray-600 dark:text-gray-300">
+                                {dimensionNames[key] || config.name}
+                              </span>
+                            </div>
+                            <span className={`font-medium ${colorClass}`}>
+                              {(value as number).toFixed(2)} / {config.max}
+                            </span>
                           </div>
-                          <span className="font-medium text-gray-900 dark:text-white">
-                            {item.value.toFixed(1)}
-                          </span>
+                          <Progress value={percentage} className="h-1.5" />
                         </div>
-                        <Progress value={item.value * 10} className="h-2" />
-                      </div>
-                    ))}
+                      );
+                    })}
                   </CardContent>
                 </Card>
 
+                {/* 快速提升建议 */}
+                {score.score?.quickWins && score.score.quickWins.length > 0 && (
+                  <Card className="bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Zap className="h-4 w-4 text-yellow-500" />
+                        快速提升建议
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <ul className="space-y-1">
+                        {score.score.quickWins.slice(0, 5).map((win: string, index: number) => (
+                          <li key={index} className="flex items-center gap-2 text-sm">
+                            <span className="text-yellow-500">⚡</span>
+                            <span>{win}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </CardContent>
+                  </Card>
+                )}
+
                 {/* 优化建议 */}
-                {score.score?.suggestions && (
+                {score.score?.suggestions && score.score.suggestions.length > 0 && (
                   <Card className="bg-white dark:bg-gray-800">
-                    <CardHeader>
-                      <CardTitle className="text-lg flex items-center gap-2">
-                        <Lightbulb className="h-5 w-5 text-yellow-500" />
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Lightbulb className="h-4 w-4 text-blue-500" />
                         优化建议
                       </CardTitle>
                     </CardHeader>
                     <CardContent>
                       <ul className="space-y-2">
-                        {score.score.suggestions.map((suggestion: string, index: number) => (
+                        {score.score.suggestions.slice(0, 8).map((suggestion: string, index: number) => (
                           <li key={index} className="flex items-start gap-2 text-sm">
                             <AlertCircle className="h-4 w-4 text-blue-500 mt-0.5 flex-shrink-0" />
                             <span className="text-gray-600 dark:text-gray-300">{suggestion}</span>
                           </li>
                         ))}
                       </ul>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* 问题类型识别 */}
+                {score.score?.analysis?.questionPatterns && score.score.analysis.questionPatterns.length > 0 && (
+                  <Card className="bg-white dark:bg-gray-800">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Target className="h-4 w-4 text-green-500" />
+                        问题类型识别
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="flex flex-wrap gap-2">
+                        {score.score.analysis.questionPatterns.map((pattern: string, index: number) => (
+                          <Badge key={index} variant="secondary">
+                            {pattern}
+                          </Badge>
+                        ))}
+                      </div>
                     </CardContent>
                   </Card>
                 )}
@@ -244,9 +349,14 @@ export default function GEOScorePage() {
                   <h3 className="text-lg font-semibold text-gray-600 dark:text-gray-400 mb-2">
                     输入内容开始评分
                   </h3>
-                  <p className="text-gray-500">
-                    系统将基于GEO六大维度进行智能评分
+                  <p className="text-gray-500 mb-4">
+                    系统将基于九大维度进行智能评分
                   </p>
+                  <div className="text-xs text-gray-400 space-y-1">
+                    <p>问题导向 · AI识别友好 · 人性化表达</p>
+                    <p>内容质量 · 信任权威 · 精准引用</p>
+                    <p>结构化数据 · 多平台适配 · SEO关键词</p>
+                  </div>
                 </CardContent>
               </Card>
             )}

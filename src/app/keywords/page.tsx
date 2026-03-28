@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogDescription,
@@ -21,9 +22,11 @@ import {
   Plus,
   Upload,
   Cloud,
-  Globe,
   Search,
   X,
+  Loader2,
+  Sparkles,
+  CheckCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -44,6 +47,23 @@ interface KeywordLibrary {
   updatedAt: Date;
 }
 
+// 蒸馏词类型
+interface DistillationKeyword {
+  word: string;
+  category: 'core' | 'longtail' | 'question' | 'brand';
+  importance: number;
+  reasoning: string;
+  selected?: boolean;
+}
+
+// 蒸馏词结果
+interface DistillationResult {
+  keywords: DistillationKeyword[];
+  coreMessage: string;
+  userIntent: string;
+  competitorGaps: string[];
+}
+
 export default function KeywordsPage() {
   const { selectedBusiness } = useBusiness();
   const [libraries, setLibraries] = useState<KeywordLibrary[]>([]);
@@ -55,6 +75,12 @@ export default function KeywordsPage() {
   
   // 输入文本状态
   const [textInputKeywords, setTextInputKeywords] = useState('');
+  
+  // 关键词挖掘状态
+  const [miningTopic, setMiningTopic] = useState('');
+  const [seedKeywords, setSeedKeywords] = useState('');
+  const [miningLoading, setMiningLoading] = useState(false);
+  const [miningResult, setMiningResult] = useState<DistillationResult | null>(null);
   
   // 初始化加载数据
   useEffect(() => {
@@ -219,6 +245,150 @@ export default function KeywordsPage() {
     }
   };
   
+  // 关键词挖掘 - 提取蒸馏词
+  const handleMiningKeywords = async () => {
+    if (!miningTopic.trim()) {
+      toast.error('请输入主题或关键词');
+      return;
+    }
+    
+    setMiningLoading(true);
+    setMiningResult(null);
+    
+    try {
+      const response = await fetch('/api/keywords/distill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topic: miningTopic,
+          seedKeywords: seedKeywords ? seedKeywords.split(/[,，、\s]+/).filter(k => k.trim()) : undefined,
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (data.success && data.data) {
+        // 默认全选所有关键词
+        const keywords = data.data.keywords.map((k: DistillationKeyword) => ({
+          ...k,
+          selected: true,
+        }));
+        setMiningResult({
+          ...data.data,
+          keywords,
+        });
+        toast.success(`成功提取 ${keywords.length} 个蒸馏词`);
+      } else {
+        toast.error(data.error || '提取蒸馏词失败');
+      }
+    } catch (error) {
+      console.error('提取蒸馏词失败:', error);
+      toast.error('提取蒸馏词失败');
+    } finally {
+      setMiningLoading(false);
+    }
+  };
+  
+  // 切换蒸馏词选中状态
+  const toggleKeywordSelection = (index: number) => {
+    if (!miningResult) return;
+    const keywords = [...miningResult.keywords];
+    keywords[index] = { ...keywords[index], selected: !keywords[index].selected };
+    setMiningResult({ ...miningResult, keywords });
+  };
+  
+  // 全选/取消全选
+  const toggleAllKeywords = (selected: boolean) => {
+    if (!miningResult) return;
+    const keywords = miningResult.keywords.map(k => ({ ...k, selected }));
+    setMiningResult({ ...miningResult, keywords });
+  };
+  
+  // 添加选中的关键词到库
+  const handleAddSelectedKeywords = async () => {
+    if (!selectedLibrary) {
+      toast.error('请先选择关键词库');
+      return;
+    }
+    
+    const selectedKeywords = miningResult?.keywords
+      .filter(k => k.selected)
+      .map(k => k.word) || [];
+    
+    if (selectedKeywords.length === 0) {
+      toast.error('请至少选择一个关键词');
+      return;
+    }
+    
+    try {
+      const response = await fetch('/api/keywords', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: selectedLibrary.id,
+          action: 'addKeywords',
+          keywords: selectedKeywords,
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok && data.library) {
+        // 重置状态
+        setMiningTopic('');
+        setSeedKeywords('');
+        setMiningResult(null);
+        setShowAddKeywordsDialog(false);
+        loadLibraries();
+        toast.success(`成功添加 ${selectedKeywords.length} 个关键词`);
+      } else {
+        toast.error(data.error || '添加关键词失败');
+      }
+    } catch (error) {
+      console.error('添加关键词失败:', error);
+      toast.error('添加关键词失败');
+    }
+  };
+  
+  // 重置挖掘状态
+  const resetMining = () => {
+    setMiningTopic('');
+    setSeedKeywords('');
+    setMiningResult(null);
+  };
+  
+  // 获取分类标签样式
+  const getCategoryStyle = (category: string) => {
+    switch (category) {
+      case 'core':
+        return 'bg-blue-100 text-blue-700 border-blue-300';
+      case 'longtail':
+        return 'bg-green-100 text-green-700 border-green-300';
+      case 'question':
+        return 'bg-orange-100 text-orange-700 border-orange-300';
+      case 'brand':
+        return 'bg-purple-100 text-purple-700 border-purple-300';
+      default:
+        return 'bg-gray-100 text-gray-700 border-gray-300';
+    }
+  };
+  
+  // 获取分类名称
+  const getCategoryName = (category: string) => {
+    switch (category) {
+      case 'core':
+        return '核心词';
+      case 'longtail':
+        return '长尾词';
+      case 'question':
+        return '问题词';
+      case 'brand':
+        return '品牌词';
+      default:
+        return '其他';
+    }
+  };
+  
   return (
     <AppLayout>
       <div className="p-6 space-y-6">
@@ -226,7 +396,7 @@ export default function KeywordsPage() {
         <div className="space-y-2">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">关键词库</h1>
           <p className="text-sm text-gray-600">
-            您可以通过手动添加，文档上传、关键词挖掘或者网站监视来创建关键词库
+            您可以通过手动添加、文档上传或关键词挖掘来创建关键词库
           </p>
           <p className="text-sm text-gray-600">
             AI会根据您上传的各个关键词进行训练，并由此创作文章
@@ -237,7 +407,10 @@ export default function KeywordsPage() {
         <div className="flex items-center gap-3">
           <Button 
             className="bg-purple-600 hover:bg-purple-700"
-            onClick={() => setShowAddKeywordsDialog(true)}
+            onClick={() => {
+              resetMining();
+              setShowAddKeywordsDialog(true);
+            }}
           >
             录入关键词
           </Button>
@@ -348,7 +521,10 @@ export default function KeywordsPage() {
                     <Button 
                       variant="outline"
                       className="border-purple-300 text-purple-600 hover:bg-purple-50"
-                      onClick={() => setShowAddKeywordsDialog(true)}
+                      onClick={() => {
+                        resetMining();
+                        setShowAddKeywordsDialog(true);
+                      }}
                     >
                       录入关键词
                     </Button>
@@ -404,19 +580,16 @@ export default function KeywordsPage() {
       
       {/* 录入关键词弹窗 */}
       <Dialog open={showAddKeywordsDialog} onOpenChange={setShowAddKeywordsDialog}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>录入关键词</DialogTitle>
+            <DialogDescription>
+              通过文本输入、AI挖掘或文件导入添加关键词
+            </DialogDescription>
           </DialogHeader>
           
-          <Tabs defaultValue="batch-upload" className="mt-4">
-            <TabsList className="grid grid-cols-4 gap-1 h-auto p-1 bg-gray-100 rounded-lg">
-              <TabsTrigger 
-                value="batch-upload"
-                className="data-[state=active]:bg-white data-[state=active]:text-purple-600 data-[state=active]:shadow-sm rounded-md py-2"
-              >
-                批量上传
-              </TabsTrigger>
+          <Tabs defaultValue="text-input" className="mt-4">
+            <TabsList className="grid grid-cols-3 gap-1 h-auto p-1 bg-gray-100 rounded-lg">
               <TabsTrigger 
                 value="text-input"
                 className="data-[state=active]:bg-white data-[state=active]:text-purple-600 data-[state=active]:shadow-sm rounded-md py-2"
@@ -427,34 +600,16 @@ export default function KeywordsPage() {
                 value="keyword-mining"
                 className="data-[state=active]:bg-white data-[state=active]:text-purple-600 data-[state=active]:shadow-sm rounded-md py-2"
               >
+                <Sparkles className="h-4 w-4 mr-1" />
                 关键词挖掘
               </TabsTrigger>
               <TabsTrigger 
-                value="web-crawl"
+                value="batch-upload"
                 className="data-[state=active]:bg-white data-[state=active]:text-purple-600 data-[state=active]:shadow-sm rounded-md py-2"
               >
-                网站抓取
+                批量上传
               </TabsTrigger>
             </TabsList>
-            
-            {/* 批量上传 */}
-            <TabsContent value="batch-upload" className="mt-4">
-              <div className="border-2 border-dashed border-purple-300 rounded-lg p-8 text-center bg-purple-50/30">
-                <Upload className="w-12 h-12 text-purple-400 mx-auto mb-4" />
-                <p className="text-gray-600 mb-2">点击或拖拽文件至此区域即可上传</p>
-                <p className="text-xs text-gray-400">
-                  支持TXT格式的单文件上传，一个关键词一个行。严禁上传敏感数据或其他非法文件。
-                </p>
-              </div>
-              <DialogFooter className="mt-4">
-                <Button variant="outline" onClick={() => setShowAddKeywordsDialog(false)}>
-                  取消
-                </Button>
-                <Button className="bg-purple-600 hover:bg-purple-700" disabled>
-                  确定
-                </Button>
-              </DialogFooter>
-            </TabsContent>
             
             {/* 输入文本 */}
             <TabsContent value="text-input" className="mt-4">
@@ -477,50 +632,185 @@ export default function KeywordsPage() {
             
             {/* 关键词挖掘 */}
             <TabsContent value="keyword-mining" className="mt-4">
-              <div className="text-center py-8">
-                <div className="w-24 h-24 mb-4 mx-auto flex items-center justify-center">
-                  <div className="relative">
-                    <Cloud className="w-16 h-16 text-gray-200" />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="w-10 h-10 bg-blue-50 rounded-lg flex items-center justify-center">
-                        <Search className="w-5 h-5 text-blue-400" />
+              {!miningResult ? (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>主题或关键词 <span className="text-red-500">*</span></Label>
+                    <Input
+                      placeholder="输入主题、行业或核心关键词，如：人工智能、SEO优化、内容营销"
+                      value={miningTopic}
+                      onChange={(e) => setMiningTopic(e.target.value)}
+                    />
+                    <p className="text-xs text-gray-500">
+                      AI将基于此主题自动提取核心词、长尾词、问题词和品牌词
+                    </p>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label>种子关键词（可选）</Label>
+                    <Input
+                      placeholder="输入已有的关键词，用逗号或空格分隔"
+                      value={seedKeywords}
+                      onChange={(e) => setSeedKeywords(e.target.value)}
+                    />
+                    <p className="text-xs text-gray-500">
+                      提供种子关键词可帮助AI生成更精准的蒸馏词
+                    </p>
+                  </div>
+                  
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setShowAddKeywordsDialog(false)}>
+                      取消
+                    </Button>
+                    <Button 
+                      className="bg-purple-600 hover:bg-purple-700"
+                      onClick={handleMiningKeywords}
+                      disabled={miningLoading || !miningTopic.trim()}
+                    >
+                      {miningLoading ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          提取中...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-4 w-4 mr-2" />
+                          提取蒸馏词
+                        </>
+                      )}
+                    </Button>
+                  </DialogFooter>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* 分析摘要 */}
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <h4 className="font-medium text-blue-800 mb-2">分析摘要</h4>
+                    <p className="text-sm text-blue-700 mb-2">{miningResult.coreMessage}</p>
+                    <p className="text-sm text-blue-600"><strong>用户意图：</strong>{miningResult.userIntent}</p>
+                    {miningResult.competitorGaps.length > 0 && (
+                      <div className="mt-2">
+                        <p className="text-sm text-blue-600"><strong>竞争机会：</strong></p>
+                        <ul className="text-sm text-blue-600 list-disc list-inside">
+                          {miningResult.competitorGaps.slice(0, 3).map((gap, i) => (
+                            <li key={i}>{gap}</li>
+                          ))}
+                        </ul>
                       </div>
+                    )}
+                  </div>
+                  
+                  {/* 操作栏 */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-gray-600">
+                        已选择 {miningResult.keywords.filter(k => k.selected).length} / {miningResult.keywords.length} 个关键词
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => toggleAllKeywords(true)}
+                      >
+                        全选
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => toggleAllKeywords(false)}
+                      >
+                        取消全选
+                      </Button>
                     </div>
                   </div>
+                  
+                  {/* 关键词分类展示 */}
+                  {['core', 'longtail', 'question', 'brand'].map(category => {
+                    const categoryKeywords = miningResult.keywords.filter(k => k.category === category);
+                    if (categoryKeywords.length === 0) return null;
+                    
+                    return (
+                      <div key={category} className="space-y-2">
+                        <h4 className="font-medium text-gray-700 flex items-center gap-2">
+                          <Badge className={getCategoryStyle(category)}>
+                            {getCategoryName(category)}
+                          </Badge>
+                          <span className="text-sm text-gray-500">({categoryKeywords.length}个)</span>
+                        </h4>
+                        <div className="grid grid-cols-1 gap-2">
+                          {categoryKeywords.map((keyword, index) => {
+                            const globalIndex = miningResult.keywords.indexOf(keyword);
+                            return (
+                              <div 
+                                key={index}
+                                className={cn(
+                                  'flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors',
+                                  keyword.selected 
+                                    ? 'border-purple-300 bg-purple-50' 
+                                    : 'border-gray-200 bg-white hover:bg-gray-50'
+                                )}
+                                onClick={() => toggleKeywordSelection(globalIndex)}
+                              >
+                                <Checkbox 
+                                  checked={keyword.selected}
+                                  onCheckedChange={() => toggleKeywordSelection(globalIndex)}
+                                  className="mt-0.5"
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium">{keyword.word}</span>
+                                    {keyword.selected && (
+                                      <CheckCircle className="h-4 w-4 text-purple-600" />
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-gray-500 mt-1">{keyword.reasoning}</p>
+                                </div>
+                                <Badge variant="outline" className="text-xs">
+                                  重要度: {keyword.importance}
+                                </Badge>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  
+                  <DialogFooter className="flex items-center gap-2">
+                    <Button variant="outline" onClick={resetMining}>
+                      重新提取
+                    </Button>
+                    <Button variant="outline" onClick={() => setShowAddKeywordsDialog(false)}>
+                      取消
+                    </Button>
+                    <Button 
+                      className="bg-purple-600 hover:bg-purple-700"
+                      onClick={handleAddSelectedKeywords}
+                      disabled={miningResult.keywords.filter(k => k.selected).length === 0}
+                    >
+                      添加选中的关键词
+                    </Button>
+                  </DialogFooter>
                 </div>
-                <p className="text-gray-500 mb-4">还没有添加网站，请点击这里添加</p>
-                <Button className="bg-purple-600 hover:bg-purple-700">
-                  挖掘关键词
-                </Button>
-              </div>
-              <DialogFooter className="mt-4">
-                <Button variant="outline" onClick={() => setShowAddKeywordsDialog(false)}>
-                  取消
-                </Button>
-              </DialogFooter>
+              )}
             </TabsContent>
             
-            {/* 网站抓取 */}
-            <TabsContent value="web-crawl" className="mt-4">
-              <div className="text-center py-8">
-                <div className="w-24 h-24 mb-4 mx-auto flex items-center justify-center">
-                  <div className="relative">
-                    <Cloud className="w-16 h-16 text-gray-200" />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="w-10 h-10 bg-blue-50 rounded-lg flex items-center justify-center">
-                        <Globe className="w-5 h-5 text-blue-400" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <p className="text-gray-500 mb-4">还没有添加网站，请点击这里添加</p>
-                <Button className="bg-purple-600 hover:bg-purple-700">
-                  新的网站分析
-                </Button>
+            {/* 批量上传 */}
+            <TabsContent value="batch-upload" className="mt-4">
+              <div className="border-2 border-dashed border-purple-300 rounded-lg p-8 text-center bg-purple-50/30">
+                <Upload className="w-12 h-12 text-purple-400 mx-auto mb-4" />
+                <p className="text-gray-600 mb-2">点击或拖拽文件至此区域即可上传</p>
+                <p className="text-xs text-gray-400">
+                  支持TXT格式的单文件上传，一个关键词一个行。严禁上传敏感数据或其他非法文件。
+                </p>
               </div>
               <DialogFooter className="mt-4">
                 <Button variant="outline" onClick={() => setShowAddKeywordsDialog(false)}>
                   取消
+                </Button>
+                <Button className="bg-purple-600 hover:bg-purple-700" disabled>
+                  确定
                 </Button>
               </DialogFooter>
             </TabsContent>

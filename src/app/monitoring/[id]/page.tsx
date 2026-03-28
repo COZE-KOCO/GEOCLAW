@@ -322,51 +322,72 @@ export default function MonitoringPage() {
               {/* 评分详情 */}
               <Card className="bg-white dark:bg-gray-800">
                 <CardHeader>
-                  <CardTitle>评分详情</CardTitle>
+                  <CardTitle>评分详情（九维度）</CardTitle>
                   <CardDescription>GEO优化评分分解</CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4">
+                <CardContent className="space-y-3">
                   <div>
                     <div className="flex justify-between mb-1">
-                      <span className="text-sm">人性化GEO</span>
-                      <span className="text-sm font-bold">{project.breakdown.humanizedGeo.toFixed(1)}/2.5</span>
+                      <span className="text-sm">问题导向</span>
+                      <span className="text-sm font-bold">{project.breakdown.problemOriented.toFixed(2)}/2</span>
                     </div>
-                    <Progress value={(project.breakdown.humanizedGeo / 2.5) * 100} className="h-2" />
+                    <Progress value={(project.breakdown.problemOriented / 2) * 100} className="h-2" />
                   </div>
                   <div>
                     <div className="flex justify-between mb-1">
-                      <span className="text-sm">内容交叉验证</span>
-                      <span className="text-sm font-bold">{project.breakdown.crossValidation.toFixed(1)}/2.5</span>
+                      <span className="text-sm">AI识别友好</span>
+                      <span className="text-sm font-bold">{project.breakdown.aiRecognition.toFixed(2)}/2</span>
                     </div>
-                    <Progress value={(project.breakdown.crossValidation / 2.5) * 100} className="h-2" />
+                    <Progress value={(project.breakdown.aiRecognition / 2) * 100} className="h-2" />
                   </div>
                   <div>
                     <div className="flex justify-between mb-1">
-                      <span className="text-sm">E-E-A-T原则</span>
-                      <span className="text-sm font-bold">{project.breakdown.eeat.toFixed(1)}/1.5</span>
+                      <span className="text-sm">人性化表达</span>
+                      <span className="text-sm font-bold">{project.breakdown.humanizedExpression.toFixed(2)}/1.5</span>
                     </div>
-                    <Progress value={(project.breakdown.eeat / 1.5) * 100} className="h-2" />
+                    <Progress value={(project.breakdown.humanizedExpression / 1.5) * 100} className="h-2" />
+                  </div>
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <span className="text-sm">内容质量</span>
+                      <span className="text-sm font-bold">{project.breakdown.contentQuality.toFixed(2)}/1.5</span>
+                    </div>
+                    <Progress value={(project.breakdown.contentQuality / 1.5) * 100} className="h-2" />
+                  </div>
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <span className="text-sm">信任权威</span>
+                      <span className="text-sm font-bold">{project.breakdown.trustAuthority.toFixed(2)}/1</span>
+                    </div>
+                    <Progress value={(project.breakdown.trustAuthority / 1) * 100} className="h-2" />
                   </div>
                   <div>
                     <div className="flex justify-between mb-1">
                       <span className="text-sm">精准引用</span>
-                      <span className="text-sm font-bold">{project.breakdown.preciseCitation.toFixed(1)}/1.5</span>
+                      <span className="text-sm font-bold">{project.breakdown.preciseCitation.toFixed(2)}/0.5</span>
                     </div>
-                    <Progress value={(project.breakdown.preciseCitation / 1.5) * 100} className="h-2" />
+                    <Progress value={(project.breakdown.preciseCitation / 0.5) * 100} className="h-2" />
                   </div>
                   <div>
                     <div className="flex justify-between mb-1">
-                      <span className="text-sm">结构化内容</span>
-                      <span className="text-sm font-bold">{project.breakdown.structuredContent.toFixed(1)}/1.0</span>
+                      <span className="text-sm">结构化数据</span>
+                      <span className="text-sm font-bold">{project.breakdown.structuredData.toFixed(2)}/0.5</span>
                     </div>
-                    <Progress value={(project.breakdown.structuredContent / 1.0) * 100} className="h-2" />
+                    <Progress value={(project.breakdown.structuredData / 0.5) * 100} className="h-2" />
+                  </div>
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <span className="text-sm">多平台适配</span>
+                      <span className="text-sm font-bold">{project.breakdown.multiPlatform.toFixed(2)}/0.5</span>
+                    </div>
+                    <Progress value={(project.breakdown.multiPlatform / 0.5) * 100} className="h-2" />
                   </div>
                   <div>
                     <div className="flex justify-between mb-1">
                       <span className="text-sm">SEO关键词</span>
-                      <span className="text-sm font-bold">{project.breakdown.seoKeywords.toFixed(1)}/1.0</span>
+                      <span className="text-sm font-bold">{project.breakdown.seoKeywords.toFixed(2)}/0.5</span>
                     </div>
-                    <Progress value={(project.breakdown.seoKeywords / 1.0) * 100} className="h-2" />
+                    <Progress value={(project.breakdown.seoKeywords / 0.5) * 100} className="h-2" />
                   </div>
                 </CardContent>
               </Card>

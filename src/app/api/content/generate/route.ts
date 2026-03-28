@@ -17,6 +17,10 @@ import {
   createContent,
   type ContentCreationRequest,
 } from '@/lib/content-generation';
+import { 
+  processImageMarkers, 
+  extractImageHeaders,
+} from '@/lib/image-generation';
 import { selectArticleType, articleTypeMap, articleSizeMap } from './utils';
 
 // 获取关键词
@@ -132,8 +136,8 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // 验证配置
-    const validation = validateGenerationConfig(config);
+    // 验证配置（严格模式，因为要立即执行生成）
+    const validation = validateGenerationConfig(config, true);
     if (!validation.valid) {
       return NextResponse.json(
         { success: false, error: validation.errors.join('; ') },
@@ -182,6 +186,8 @@ export async function POST(request: NextRequest) {
       brandInfo: config.customInstructions,
       
       // 图片设置
+      imageSource: config.imageSource,
+      imageFilter: config.imageFilter,
       enableThumbnail: config.enableThumbnail,
       enableContentImages: config.enableContentImages,
       imageCount: config.imageCount,
@@ -226,7 +232,6 @@ export async function POST(request: NextRequest) {
       creativityLevel: config.creativityLevel,
       perspective: config.perspective,
       formality: config.formality,
-      personaId: config.personaId,
       replacements: config.replacements,
       enableWebSearch: config.enableWebSearch,
       knowledgeBaseId: config.knowledgeBaseId,
@@ -243,6 +248,48 @@ export async function POST(request: NextRequest) {
       );
     }
     
+    // AI 生图后处理：解析图片标注并生成实际图片
+    let finalContent = result.generated.content;
+    let coverImageUrl: string | undefined;
+    let contentImageUrls: string[] = [];
+    
+    if (config.imageSource === 'ai') {
+      try {
+        // 提取请求头用于图片生成 API
+        const customHeaders = extractImageHeaders(request.headers);
+        
+        console.log('开始 AI 生图处理...');
+        const imageResult = await processImageMarkers(result.generated.content, {
+          customHeaders,
+          onProgress: (stage, current, total) => {
+            console.log(`AI 生图进度: ${stage} ${current}/${total}`);
+          },
+        });
+        
+        finalContent = imageResult.processedContent;
+        
+        if (imageResult.coverImage) {
+          coverImageUrl = imageResult.coverImage.url;
+          console.log('封面图生成成功:', coverImageUrl);
+        }
+        
+        if (imageResult.contentImages.length > 0) {
+          contentImageUrls = imageResult.contentImages.map(img => img.url);
+          console.log(`生成了 ${contentImageUrls.length} 张内容配图`);
+        }
+        
+        // 更新 distillationWords 中的图片信息
+        if (coverImageUrl || contentImageUrls.length > 0) {
+          result.generated.distillationWords.push(
+            `[AI生图] 封面: ${coverImageUrl ? '已生成' : '未生成'}, 配图: ${contentImageUrls.length}张`
+          );
+        }
+      } catch (imageError) {
+        console.error('AI 生图处理失败:', imageError);
+        // 生图失败不影响文章保存，继续使用原文内容
+      }
+    }
+    
     const supabase = getSupabaseClient();
     
     // 保存草稿到数据库
@@ -251,7 +298,7 @@ export async function POST(request: NextRequest) {
       .insert({
         business_id: businessId,
         title: result.generated.title,
-        content: result.generated.content,
+        content: finalContent, // 使用处理后的内容（包含生成的图片）
         distillation_words: result.generated.distillationWords,
         outline: result.generated.outline,
         seo_score: result.generated.seoScore,
@@ -286,8 +333,10 @@ export async function POST(request: NextRequest) {
           result: {
             draftId: draft.id,
             title: result.generated.title,
-            content: result.generated.content,
+            content: finalContent,
             seoScore: result.generated.seoScore,
+            coverImageUrl,
+            contentImageUrls,
           },
           scheduled_at: new Date().toISOString(),
           started_at: new Date().toISOString(),
@@ -300,9 +349,11 @@ export async function POST(request: NextRequest) {
       data: {
         draftId: draft.id,
         title: result.generated.title,
-        content: result.generated.content,
+        content: finalContent,
         seoScore: result.generated.seoScore,
         distillationWords: result.generated.distillationWords,
+        coverImageUrl,
+        contentImageUrls,
       },
     });
   } catch (error) {

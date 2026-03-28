@@ -11,6 +11,7 @@ let mainWindow: BrowserWindow | null = null;
 let authManager: PlatformAuthManager;
 let currentBusinessId: string = 'default';
 let serverProcess: ChildProcess | null = null;
+let selectorPickerWindow: BrowserWindow | null = null;
 
 // 开发模式下加载localhost，生产模式启动本地服务器
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
@@ -21,6 +22,8 @@ const LOCAL_SERVER_URL = `http://localhost:${LOCAL_SERVER_PORT}`;
 const REMOTE_SERVER_URL = process.env.ELECTRON_SERVER_URL || 'https://geoclaw.coze.site';
 // 生产环境：优先使用远程服务器（云端API），确保能访问扣子内置数据库
 const PROD_SERVER_URL = REMOTE_SERVER_URL;
+// 统一的服务器地址：开发模式优先使用环境变量，否则用本地
+const SERVER_URL = isDev ? (process.env.ELECTRON_SERVER_URL || DEV_SERVER_URL) : PROD_SERVER_URL;
 
 // 配置自动更新
 autoUpdater.autoDownload = false; // 不自动下载，让用户选择
@@ -111,8 +114,9 @@ function createWindow() {
 
   // 加载应用
   if (isDev) {
-    // 开发模式：加载本地开发服务器
-    mainWindow.loadURL(DEV_SERVER_URL);
+    // 开发模式：优先使用环境变量，否则用 localhost
+    console.log('[Electron] 开发模式，连接地址:', SERVER_URL);
+    mainWindow.loadURL(SERVER_URL);
     mainWindow.webContents.openDevTools();
   } else {
     // 生产模式：直接加载远程服务器（扣子云端）
@@ -280,8 +284,7 @@ function initAutoUpdater() {
 
 // 初始化发布任务调度器
 function initPublishScheduler() {
-  const serverUrl = isDev ? DEV_SERVER_URL : PROD_SERVER_URL;
-  const scheduler = createPublishScheduler(mainWindow, serverUrl, 60000); // 每60秒检查一次
+  const scheduler = createPublishScheduler(mainWindow, SERVER_URL, 60000); // 每60秒检查一次
 
   // 启动调度器
   scheduler.start();
@@ -316,8 +319,7 @@ function initPublishScheduler() {
 
 // 初始化创作任务调度器
 function initCreationScheduler() {
-  const serverUrl = isDev ? DEV_SERVER_URL : PROD_SERVER_URL;
-  const scheduler = createCreationScheduler(mainWindow, serverUrl, 60000); // 每60秒检查一次
+  const scheduler = createCreationScheduler(mainWindow, SERVER_URL, 60000); // 每60秒检查一次
 
   // 启动调度器
   scheduler.start();
@@ -343,12 +345,46 @@ function initCreationScheduler() {
     }
     return { success: true };
   });
+
+  // IPC: 添加计划定时器
+  ipcMain.handle('creation-plan-created', async (_, { planId, planName, executeTime }) => {
+    scheduler.addPlanTimer(planId, planName, new Date(executeTime));
+    return { success: true };
+  });
+
+  // IPC: 移除计划定时器
+  ipcMain.handle('creation-plan-deleted', async (_, { planId }) => {
+    console.log(`[Electron] 收到删除计划通知: ${planId}`);
+    const removed = scheduler.removePlanTimer(planId);
+    if (removed) {
+      console.log(`[Electron] 计划定时器移除成功: ${planId}`);
+    } else {
+      console.warn(`[Electron] 计划定时器移除失败（可能不存在）: ${planId}`);
+    }
+    return { success: removed };
+  });
+
+  // IPC: 更新计划定时器
+  ipcMain.handle('creation-plan-updated', async (_, { planId, planName, executeTime }) => {
+    scheduler.addPlanTimer(planId, planName, new Date(executeTime));
+    return { success: true };
+  });
+
+  // IPC: 刷新调度器（重新加载所有计划）
+  ipcMain.handle('refresh-creation-scheduler', async () => {
+    await scheduler.rescheduleAll();
+    return { success: true };
+  });
+
+  // IPC: 获取已调度的计划列表
+  ipcMain.handle('get-scheduled-plans', () => {
+    return scheduler.getScheduledPlans();
+  });
 }
 
 // 初始化发布计划调度器
 function initPublishPlanScheduler() {
-  const serverUrl = isDev ? DEV_SERVER_URL : PROD_SERVER_URL;
-  const scheduler = createPublishPlanScheduler(mainWindow, serverUrl, 60000); // 每60秒检查一次
+  const scheduler = createPublishPlanScheduler(mainWindow, SERVER_URL, 60000); // 每60秒检查一次
 
   // 启动调度器
   scheduler.start();
@@ -376,6 +412,7 @@ app.whenReady().then(() => {
   initPublishScheduler(); // 启动发布任务调度器
   initCreationScheduler(); // 启动创作任务调度器
   initPublishPlanScheduler(); // 启动发布计划调度器
+  initSelectorPicker(); // 启动选择器捕获功能
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -399,11 +436,15 @@ app.on('web-contents-created', (_, contents) => {
   contents.on('will-navigate', (event, url) => {
     // 允许的URL：
     // 1. 本地开发服务器
-    // 2. file:// 协议
-    // 3. 平台域名（登录窗口可能跳转到同域名的其他页面）
+    // 2. 应用服务器（包含远程URL如 dev.coze.site）
+    // 3. file:// 协议
+    // 4. 扣子平台域名
+    // 5. 平台域名（登录窗口可能跳转到同域名的其他页面）
     const isAllowed = 
       url.startsWith(DEV_SERVER_URL) || 
+      url.startsWith(SERVER_URL) ||
       url.startsWith('file://') ||
+      url.includes('.coze.site') ||
       authManager?.isPlatformDomain(url);
     
     if (!isAllowed) {
@@ -422,3 +463,118 @@ ipcMain.handle('get-version', () => {
     arch: process.arch,
   };
 });
+
+// ====== 可视化选择器相关 ======
+
+/**
+ * 创建选择器捕获窗口
+ */
+function createSelectorPickerWindow(url: string): Promise<{
+  success: boolean;
+  error?: string;
+}> {
+  return new Promise((resolve) => {
+    // 如果已有选择器窗口，先关闭
+    if (selectorPickerWindow) {
+      selectorPickerWindow.close();
+      selectorPickerWindow = null;
+    }
+
+    selectorPickerWindow = new BrowserWindow({
+      width: 1200,
+      height: 800,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, 'selector-picker.js'),
+        devTools: true,  // 允许开发者工具
+      },
+      title: '选择元素 - GEO优化工具',
+      show: false,
+    });
+
+    // 窗口准备好后显示
+    selectorPickerWindow.once('ready-to-show', () => {
+      selectorPickerWindow?.show();
+      // 加载完成后自动启动选择器
+      selectorPickerWindow?.webContents.executeJavaScript('window.selectorPicker?.start()');
+      // 自动打开开发者工具便于调试
+      selectorPickerWindow?.webContents.openDevTools({ mode: 'detach' });
+      resolve({ success: true });
+    });
+
+    // 加载目标页面
+    selectorPickerWindow.loadURL(url);
+
+    // 监听页面导航完成，自动重新启动选择器
+    // 支持用户 Shift+点击导航到新页面后继续选择
+    selectorPickerWindow.webContents.on('did-navigate', () => {
+      console.log('[SelectorPickerWindow] Page navigated, restarting picker');
+      // 延迟一下确保页面脚本加载完成
+      setTimeout(() => {
+        selectorPickerWindow?.webContents.executeJavaScript(`
+          window.selectorPicker?.start();
+          console.log('[SelectorPicker] Restarted after navigation');
+        `).catch(() => {});
+      }, 800);
+    });
+
+    // 也监听在同一个页面内的导航（hash 变化等）
+    selectorPickerWindow.webContents.on('did-navigate-in-page', () => {
+      console.log('[SelectorPickerWindow] In-page navigation');
+    });
+
+    // 监听窗口关闭
+    selectorPickerWindow.on('closed', () => {
+      selectorPickerWindow = null;
+      // 通知主窗口选择被取消
+      mainWindow?.webContents.send('selector-picker:cancelled');
+    });
+  });
+}
+
+/**
+ * 初始化选择器捕获 IPC
+ */
+function initSelectorPicker() {
+  // 启动选择器捕获窗口
+  ipcMain.handle('selector-picker:start', async (_, url: string) => {
+    return createSelectorPickerWindow(url);
+  });
+
+  // 停止选择器捕获
+  ipcMain.handle('selector-picker:stop', async () => {
+    if (selectorPickerWindow) {
+      selectorPickerWindow.close();
+      selectorPickerWindow = null;
+    }
+    return { success: true };
+  });
+
+  // 从选择器窗口接收选中的元素
+  ipcMain.on('selector-picker:element-selected', (_, data: {
+    elementInfo: any;
+    selectors: any[];
+    timestamp: number;
+  }) => {
+    // 转发给主窗口
+    mainWindow?.webContents.send('selector-picker:selected', data);
+    
+    // 关闭选择器窗口
+    if (selectorPickerWindow) {
+      setTimeout(() => {
+        selectorPickerWindow?.close();
+        selectorPickerWindow = null;
+      }, 500);
+    }
+  });
+
+  // 从选择器窗口接收取消事件
+  ipcMain.on('selector-picker:cancelled', () => {
+    mainWindow?.webContents.send('selector-picker:cancelled');
+    if (selectorPickerWindow) {
+      selectorPickerWindow.close();
+      selectorPickerWindow = null;
+    }
+  });
+}

@@ -642,7 +642,10 @@ export function getGradeV2(total: number): { grade: string; color: string; descr
 }
 
 /**
- * 导出兼容旧版本的函数
+ * 导出统一版本（兼容旧版本接口）
+ * 注意：现在统一版本取代了 V1 和 V2
  */
-export { calculateGEOScore, getGrade } from './geo-scoring';
-export type { GEOScore, ContentAnalysis } from './geo-scoring';
+export { calculateGEOScore, getGrade } from './geo-scoring-unified';
+export type { GEOScoreUnified, ContentAnalysisUnified } from './geo-scoring-unified';
+// 兼容旧类型名称
+export type { GEOScoreUnified as GEOScore, ContentAnalysisUnified as ContentAnalysis } from './geo-scoring-unified';

@@ -159,7 +159,7 @@ export function ContentAudit({
           <div className="flex gap-4">
             <div className="flex-1">
               <span className="text-sm text-gray-500 mb-1 block">行业</span>
-              <Select value={selectedIndustry} onValueChange={setSelectedIndustry}>
+              <Select value={selectedIndustry || ''} onValueChange={setSelectedIndustry}>
                 <SelectTrigger>
                   <SelectValue placeholder="选择行业（可选）" />
                 </SelectTrigger>
@@ -172,7 +172,7 @@ export function ContentAudit({
             </div>
             <div className="flex-1">
               <span className="text-sm text-gray-500 mb-1 block">平台</span>
-              <Select value={selectedPlatform} onValueChange={setSelectedPlatform}>
+              <Select value={selectedPlatform || ''} onValueChange={setSelectedPlatform}>
                 <SelectTrigger>
                   <SelectValue placeholder="选择平台（可选）" />
                 </SelectTrigger>

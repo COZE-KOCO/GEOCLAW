@@ -1,5 +1,3 @@
-.next
-
 # Dependencies
 node_modules/
 .pnp
@@ -84,12 +82,6 @@ Desktop.ini
 .tmp/
 .temp/
 
-# Optional files
-*.tgz
-*.gz
-*.zip
-*.tar
-
 # TypeScript
 *.tsbuildinfo
 
@@ -97,4 +89,5 @@ Desktop.ini
 .vercel
 .turbo
 
+# Coze
 .coze-logs

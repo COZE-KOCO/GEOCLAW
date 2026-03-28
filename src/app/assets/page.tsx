@@ -979,6 +979,9 @@ export default function AssetsPage() {
           <DialogContent className="sm:max-w-[400px]">
             <DialogHeader>
               <DialogTitle>新建文件夹</DialogTitle>
+              <DialogDescription>
+                创建新文件夹来组织您的素材
+              </DialogDescription>
             </DialogHeader>
             <div className="py-4">
               <Label htmlFor="folderName">文件夹名称</Label>
@@ -1006,6 +1009,9 @@ export default function AssetsPage() {
           <DialogContent className="sm:max-w-[500px]">
             <DialogHeader>
               <DialogTitle>编辑素材信息</DialogTitle>
+              <DialogDescription>
+                修改素材的名称、标签和描述信息
+              </DialogDescription>
             </DialogHeader>
             <div className="py-4 space-y-4">
               <div className="space-y-2">
@@ -1068,6 +1074,9 @@ export default function AssetsPage() {
           <DialogContent className="sm:max-w-[800px]">
             <DialogHeader>
               <DialogTitle>{previewAsset?.name}</DialogTitle>
+              <DialogDescription>
+                素材预览
+              </DialogDescription>
             </DialogHeader>
             <div className="py-4">
               {previewAsset?.type === 'image' ? (

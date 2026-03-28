@@ -178,19 +178,26 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // 验证内容配置
+    // 验证内容配置（非严格模式，允许创建后配置）
     const contentConfig: GenerationConfig = {
       ...defaultGenerationConfig,
       ...body.contentConfig,
     };
     
-    const validation = validateGenerationConfig(contentConfig);
+    const validation = validateGenerationConfig(contentConfig, false);
+    
+    // 只有在严格错误时才阻止创建
     if (!validation.valid) {
       console.error('[CreationPlans] 配置验证失败:', validation.errors);
       return NextResponse.json(
         { success: false, error: validation.errors.join('; ') },
         { status: 400 }
       );
+    }
+    
+    // 如果有警告，记录日志但不阻止创建
+    if (validation.warnings.length > 0) {
+      console.log('[CreationPlans] 配置警告:', validation.warnings);
     }
     
     // 构建输入
@@ -276,7 +283,8 @@ export async function POST(request: NextRequest) {
     
     return NextResponse.json({ 
       success: true, 
-      data: dbToPlan(data) 
+      data: dbToPlan(data),
+      warnings: validation.warnings.length > 0 ? validation.warnings : undefined,
     });
   } catch (error) {
     console.error('[CreationPlans] 创建计划异常:', error);
@@ -398,6 +406,17 @@ export async function DELETE(request: NextRequest) {
       .from('creation_tasks')
       .delete()
       .eq('plan_id', id);
+    
+    // 删除关联的发布任务
+    const { error: publishTaskError } = await supabase
+      .from('publish_tasks')
+      .delete()
+      .eq('plan_id', id);
+    
+    if (publishTaskError) {
+      console.warn('删除关联发布任务失败:', publishTaskError);
+      // 不阻断删除计划的主流程
+    }
     
     // 再删除计划
     const { error } = await supabase

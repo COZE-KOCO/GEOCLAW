@@ -4,12 +4,14 @@
  */
 
 import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { PlatformCategory, AIModel } from '@/config/platforms';
 
 export interface MatrixAccount {
   id: string;
   businessId: string;
-  personaId?: string;
   platform: string; // zhihu, xiaohongshu, wechat, toutiao, bilibili
+  platformCategory?: PlatformCategory; // 平台分类：platform/geo_platform/official_site
+  aiModel?: AIModel; // GEO平台所属AI模型
   accountName: string;
   displayName: string;
   homepageUrl?: string;
@@ -18,14 +20,23 @@ export interface MatrixAccount {
   status: 'active' | 'inactive' | 'pending';
   authStatus: 'pending' | 'authorized' | 'expired';
   metadata?: Record<string, any>;
+  // 官网Webhook配置
+  webhookConfig?: {
+    url: string;
+    method?: 'GET' | 'POST' | 'PUT';
+    headers?: Record<string, string>;
+    authToken?: string;
+    enabled: boolean;
+  };
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface CreateAccountInput {
   businessId: string;
-  personaId?: string;
   platform: string;
+  platformCategory?: PlatformCategory;
+  aiModel?: AIModel;
   accountName: string;
   displayName: string;
   homepageUrl?: string;
@@ -33,16 +44,19 @@ export interface CreateAccountInput {
   followers?: number;
   status?: 'active' | 'inactive' | 'pending';
   metadata?: Record<string, any>;
+  webhookConfig?: MatrixAccount['webhookConfig'];
 }
 
 export interface UpdateAccountInput {
-  personaId?: string;
   displayName?: string;
   homepageUrl?: string;
   avatar?: string;
   followers?: number;
   status?: 'active' | 'inactive' | 'pending';
+  platformCategory?: PlatformCategory;
+  aiModel?: AIModel;
   metadata?: Record<string, any>;
+  webhookConfig?: MatrixAccount['webhookConfig'];
 }
 
 // 平台配置
@@ -166,22 +180,27 @@ export async function getAccountById(id: string): Promise<MatrixAccount | null> 
 export async function createAccount(input: CreateAccountInput): Promise<MatrixAccount> {
   const client = getSupabaseClient();
   
+  // 将 aiModel 和 platformCategory 存储到 metadata 中（因为数据库没有这些列）
+  const metadata = {
+    homepageUrl: input.homepageUrl,
+    authStatus: input.metadata?.authStatus || 'pending',
+    webhookConfig: input.webhookConfig,
+    aiModel: input.aiModel || null,
+    platformCategory: input.platformCategory || null,
+    ...input.metadata,
+  };
+
   const { data: account, error } = await client
     .from('matrix_accounts')
     .insert({
       business_id: input.businessId,
-      persona_id: input.personaId,
       platform: input.platform,
       account_name: input.accountName,
       display_name: input.displayName,
       avatar: input.avatar,
       followers: input.followers || 0,
       status: input.status || 'active',
-      metadata: {
-        homepageUrl: input.homepageUrl,
-        authStatus: input.metadata?.authStatus || 'pending',
-        ...input.metadata,
-      },
+      metadata: metadata,
     })
     .select()
     .single();
@@ -200,16 +219,39 @@ export async function createAccount(input: CreateAccountInput): Promise<MatrixAc
 export async function updateAccount(id: string, input: UpdateAccountInput): Promise<MatrixAccount | null> {
   const client = getSupabaseClient();
   
+  // 先获取现有 metadata，因为 platformCategory 和 aiModel 存储在 metadata 中
+  const { data: existingAccount } = await client
+    .from('matrix_accounts')
+    .select('metadata')
+    .eq('id', id)
+    .single();
+  
+  const existingMetadata = existingAccount?.metadata || {};
+  
   const updateData: Record<string, any> = {
     updated_at: new Date().toISOString()
   };
 
-  if (input.personaId !== undefined) updateData.persona_id = input.personaId;
   if (input.displayName !== undefined) updateData.display_name = input.displayName;
   if (input.avatar !== undefined) updateData.avatar = input.avatar;
   if (input.followers !== undefined) updateData.followers = input.followers;
   if (input.status !== undefined) updateData.status = input.status;
-  if (input.metadata !== undefined) updateData.metadata = input.metadata;
+  
+  // 将 platformCategory 和 aiModel 存储到 metadata 中（因为数据库没有这些列）
+  const newMetadata = { ...existingMetadata };
+  if (input.platformCategory !== undefined) {
+    newMetadata.platformCategory = input.platformCategory;
+  }
+  if (input.aiModel !== undefined) {
+    newMetadata.aiModel = input.aiModel;
+  }
+  if (input.metadata !== undefined) {
+    Object.assign(newMetadata, input.metadata);
+  }
+  if (input.webhookConfig !== undefined) {
+    newMetadata.webhookConfig = input.webhookConfig;
+  }
+  updateData.metadata = newMetadata;
 
   const { data: account, error } = await client
     .from('matrix_accounts')
@@ -276,6 +318,8 @@ export async function getAccountStatsByBusiness(businessId: string): Promise<{
   active: number;
   platforms: Record<string, number>;
   totalFollowers: number;
+  byCategory: Record<string, number>;
+  byAiModel: Record<string, number>;
 }> {
   const accounts = await getAccountsByBusiness(businessId);
   
@@ -287,7 +331,61 @@ export async function getAccountStatsByBusiness(businessId: string): Promise<{
       return acc;
     }, {} as Record<string, number>),
     totalFollowers: accounts.reduce((sum, a) => sum + a.followers, 0),
+    byCategory: accounts.reduce((acc, a) => {
+      const category = a.platformCategory || 'platform';
+      acc[category] = (acc[category] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>),
+    byAiModel: accounts.reduce((acc, a) => {
+      if (a.aiModel) {
+        acc[a.aiModel] = (acc[a.aiModel] || 0) + 1;
+      }
+      return acc;
+    }, {} as Record<string, number>),
   };
+}
+
+/**
+ * 根据平台分类获取账号
+ */
+export async function getAccountsByCategory(
+  businessId: string, 
+  category: PlatformCategory
+): Promise<MatrixAccount[]> {
+  // 由于数据库没有 platform_category 列，从所有账号中过滤
+  const allAccounts = await getAccountsByBusiness(businessId);
+  return allAccounts.filter(account => account.platformCategory === category);
+}
+
+/**
+ * 根据AI模型获取GEO平台账号
+ */
+export async function getGeoAccountsByModel(
+  businessId: string,
+  aiModel: AIModel
+): Promise<MatrixAccount[]> {
+  // 由于数据库没有 ai_model 和 platform_category 列，从所有账号中过滤
+  const allAccounts = await getAccountsByBusiness(businessId);
+  return allAccounts.filter(
+    account => account.platformCategory === PlatformCategory.GEO_PLATFORM && account.aiModel === aiModel
+  );
+}
+
+/**
+ * 获取所有官网账号（支持Webhook推送）
+ */
+export async function getOfficialSiteAccounts(businessId: string): Promise<MatrixAccount[]> {
+  // 由于数据库没有 platform_category 列，从所有账号中过滤
+  const allAccounts = await getAccountsByBusiness(businessId);
+  return allAccounts.filter(account => account.platformCategory === PlatformCategory.OFFICIAL_SITE);
+}
+
+/**
+ * 获取启用Webhook的官网账号
+ */
+export async function getWebhookEnabledAccounts(businessId: string): Promise<MatrixAccount[]> {
+  const accounts = await getOfficialSiteAccounts(businessId);
+  return accounts.filter(a => a.webhookConfig?.enabled);
 }
 
 // 转换函数
@@ -295,8 +393,10 @@ function transformAccount(dbAccount: any): MatrixAccount {
   return {
     id: dbAccount.id,
     businessId: dbAccount.business_id,
-    personaId: dbAccount.persona_id,
     platform: dbAccount.platform,
+    // 从 metadata 读取 platformCategory 和 aiModel（因为数据库没有这些列）
+    platformCategory: dbAccount.metadata?.platformCategory as PlatformCategory || dbAccount.platform_category as PlatformCategory || undefined,
+    aiModel: dbAccount.metadata?.aiModel as AIModel || dbAccount.ai_model as AIModel || undefined,
     accountName: dbAccount.account_name,
     displayName: dbAccount.display_name,
     homepageUrl: dbAccount.metadata?.homepageUrl,
@@ -305,6 +405,7 @@ function transformAccount(dbAccount: any): MatrixAccount {
     status: dbAccount.status || 'active',
     authStatus: dbAccount.metadata?.authStatus || 'pending',
     metadata: dbAccount.metadata,
+    webhookConfig: dbAccount.metadata?.webhookConfig,
     createdAt: new Date(dbAccount.created_at),
     updatedAt: new Date(dbAccount.updated_at),
   };

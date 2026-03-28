@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createProject } from '@/lib/project-store';
-import { calculateGEOScore, getGrade } from '@/lib/geo-scoring';
+import { calculateGEOScore, getGrade, type ContentAnalysisUnified } from '@/lib/geo-scoring-unified';
 
 export async function POST(request: NextRequest) {
   try {
@@ -22,8 +22,8 @@ export async function POST(request: NextRequest) {
       references = references.split('\n').map((r: string) => r.trim()).filter((r: string) => r);
     }
 
-    // 计算GEO评分
-    const analysis = {
+    // 计算GEO评分（统一版）
+    const analysis: ContentAnalysisUnified = {
       title,
       content,
       author: author || undefined,
@@ -31,6 +31,7 @@ export async function POST(request: NextRequest) {
       keywords: keywords || [],
       hasSchema: hasSchema || false,
       hasFAQ: hasFAQ || false,
+      hasImages: content.includes('![图片') || content.includes('<img'),
       wordCount: content.length,
     };
 

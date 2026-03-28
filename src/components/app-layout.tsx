@@ -1,8 +1,10 @@
 'use client';
 
-import { ReactNode } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { Sidebar } from '@/components/sidebar';
 import { BusinessSelector } from '@/components/business-selector';
+import { BusinessManager } from '@/components/business-manager';
+import { useBusiness } from '@/contexts/business-context';
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -13,8 +15,19 @@ interface AppLayoutProps {
  * - 左侧固定Sidebar导航
  * - 顶部全局工具栏（商家选择器等）
  * - 右侧内容区域
+ * - 自动检测新用户并引导创建企业
  */
 export function AppLayout({ children }: AppLayoutProps) {
+  const { needsCreateBusiness, loading } = useBusiness();
+  const [showBusinessManager, setShowBusinessManager] = useState(false);
+
+  // 当检测到用户需要创建企业时，自动弹出创建对话框
+  useEffect(() => {
+    if (!loading && needsCreateBusiness) {
+      setShowBusinessManager(true);
+    }
+  }, [needsCreateBusiness, loading]);
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex">
       {/* 左侧固定导航栏 */}
@@ -32,6 +45,9 @@ export function AppLayout({ children }: AppLayoutProps) {
           {children}
         </div>
       </main>
+
+      {/* 新用户引导：创建企业对话框 */}
+      <BusinessManager open={showBusinessManager} onOpenChange={setShowBusinessManager} />
     </div>
   );
 }

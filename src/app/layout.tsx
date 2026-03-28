@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import { Inspector } from 'react-dev-inspector';
 import { ElectronProvider } from '@/components/electron-provider';
 import { BusinessProvider } from '@/contexts/business-context';
+import { UserProvider } from '@/contexts/user-context';
+import { Toaster } from '@/components/ui/sonner';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -25,9 +27,11 @@ export const metadata: Metadata = {
   ],
   authors: [{ name: 'GEO Optimizer Team' }],
   generator: 'GEO Optimizer',
-  // icons: {
-  //   icon: '',
-  // },
+  icons: {
+    icon: '/logo.png',
+    shortcut: '/logo.png',
+    apple: '/logo.png',
+  },
   openGraph: {
     title: '扣子编程 | 你的 AI 工程师已就位',
     description:
@@ -70,10 +74,13 @@ export default function RootLayout({
       <body className={`antialiased`}>
         {isDev && <Inspector />}
         <ElectronProvider>
-          <BusinessProvider>
-            {children}
-          </BusinessProvider>
+          <UserProvider>
+            <BusinessProvider>
+              {children}
+            </BusinessProvider>
+          </UserProvider>
         </ElectronProvider>
+        <Toaster />
       </body>
     </html>
   );

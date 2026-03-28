@@ -214,43 +214,61 @@ export default async function ContentPage({
           {/* 评分详情 */}
           <section className="border-t border-gray-200 dark:border-gray-700 pt-8 mt-8">
             <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
-              GEO优化评分详情
+              GEO优化评分详情（九维度）
             </h2>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
               <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-                <div className="text-sm text-gray-600 dark:text-gray-400">人性化GEO</div>
+                <div className="text-sm text-gray-600 dark:text-gray-400">问题导向</div>
                 <div className="text-2xl font-bold text-gray-900 dark:text-white">
-                  {project.breakdown.humanizedGeo.toFixed(1)}/2.5
+                  {project.breakdown.problemOriented.toFixed(2)}/2
                 </div>
               </div>
               <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-                <div className="text-sm text-gray-600 dark:text-gray-400">内容交叉验证</div>
+                <div className="text-sm text-gray-600 dark:text-gray-400">AI识别友好</div>
                 <div className="text-2xl font-bold text-gray-900 dark:text-white">
-                  {project.breakdown.crossValidation.toFixed(1)}/2.5
+                  {project.breakdown.aiRecognition.toFixed(2)}/2
                 </div>
               </div>
               <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-                <div className="text-sm text-gray-600 dark:text-gray-400">E-E-A-T原则</div>
+                <div className="text-sm text-gray-600 dark:text-gray-400">人性化表达</div>
                 <div className="text-2xl font-bold text-gray-900 dark:text-white">
-                  {project.breakdown.eeat.toFixed(1)}/1.5
+                  {project.breakdown.humanizedExpression.toFixed(2)}/1.5
+                </div>
+              </div>
+              <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
+                <div className="text-sm text-gray-600 dark:text-gray-400">内容质量</div>
+                <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                  {project.breakdown.contentQuality.toFixed(2)}/1.5
+                </div>
+              </div>
+              <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
+                <div className="text-sm text-gray-600 dark:text-gray-400">信任权威</div>
+                <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                  {project.breakdown.trustAuthority.toFixed(2)}/1
                 </div>
               </div>
               <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
                 <div className="text-sm text-gray-600 dark:text-gray-400">精准引用</div>
                 <div className="text-2xl font-bold text-gray-900 dark:text-white">
-                  {project.breakdown.preciseCitation.toFixed(1)}/1.5
+                  {project.breakdown.preciseCitation.toFixed(2)}/0.5
                 </div>
               </div>
               <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-                <div className="text-sm text-gray-600 dark:text-gray-400">结构化内容</div>
+                <div className="text-sm text-gray-600 dark:text-gray-400">结构化数据</div>
                 <div className="text-2xl font-bold text-gray-900 dark:text-white">
-                  {project.breakdown.structuredContent.toFixed(1)}/1.0
+                  {project.breakdown.structuredData.toFixed(2)}/0.5
+                </div>
+              </div>
+              <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
+                <div className="text-sm text-gray-600 dark:text-gray-400">多平台适配</div>
+                <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                  {project.breakdown.multiPlatform.toFixed(2)}/0.5
                 </div>
               </div>
               <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
                 <div className="text-sm text-gray-600 dark:text-gray-400">SEO关键词</div>
                 <div className="text-2xl font-bold text-gray-900 dark:text-white">
-                  {project.breakdown.seoKeywords.toFixed(1)}/1.0
+                  {project.breakdown.seoKeywords.toFixed(2)}/0.5
                 </div>
               </div>
             </div>

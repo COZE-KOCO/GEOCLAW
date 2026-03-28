@@ -4,6 +4,7 @@
  */
 
 import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { PlatformCategory } from '@/config/platforms';
 
 // ==================== 类型定义 ====================
 
@@ -14,6 +15,32 @@ export interface TargetPlatform {
   platform: string;
   accountId: string;
   accountName?: string;
+  platformCategory?: PlatformCategory; // 平台分类
+  webhookConfig?: {
+    url: string;
+    method?: 'GET' | 'POST' | 'PUT';
+    headers?: Record<string, string>;
+    authToken?: string;
+    enabled: boolean;
+  };
+}
+
+export interface BrowserTarget {
+  platform: string;
+  accountId: string;
+  accountName?: string;
+}
+
+export interface WebhookTarget {
+  accountId: string;
+  accountName?: string;
+  webhookConfig: {
+    url: string;
+    method?: 'GET' | 'POST' | 'PUT';
+    headers?: Record<string, string>;
+    authToken?: string;
+    enabled: boolean;
+  };
 }
 
 export interface PublishResult {
@@ -45,20 +72,37 @@ export interface PublishTask {
   
   // 发布目标
   targetPlatforms: TargetPlatform[];
+  // 分离的发布目标
+  browserTargets: BrowserTarget[];
+  webhookTargets: WebhookTarget[];
   
   // 定时配置
   scheduledAt?: Date;
   recurringRule?: string;
   
-  // 执行状态
+  // 整体执行状态
   status: TaskStatus;
   progress: number;
   totalPlatforms: number;
   publishedPlatforms: number;
   failedPlatforms: number;
   
+  // 浏览器发布状态
+  browserStatus?: string;
+  browserProgress?: number;
+  browserStartedAt?: Date;
+  browserCompletedAt?: Date;
+  
+  // Webhook推送状态
+  webhookStatus?: string;
+  webhookProgress?: number;
+  webhookStartedAt?: Date;
+  webhookCompletedAt?: Date;
+  
   // 执行结果
   results: PublishResult[];
+  webhookResults?: any[];
+  
   startedAt?: Date;
   completedAt?: Date;
   error?: string;
@@ -67,6 +111,8 @@ export interface PublishTask {
   retryCount: number;
   maxRetries: number;
   retryDelay: number;
+  webhookRetryCount?: number;
+  webhookMaxRetries?: number;
   
   // 通知配置
   notifyOnComplete: boolean;
@@ -281,12 +327,51 @@ export async function getPublishTaskStats(options?: {
 // ==================== 创建和更新函数 ====================
 
 /**
+ * 分离目标平台为浏览器发布目标和Webhook推送目标
+ */
+function separateTargets(
+  targets: TargetPlatform[]
+): { browserTargets: BrowserTarget[]; webhookTargets: WebhookTarget[] } {
+  const browserTargets: BrowserTarget[] = [];
+  const webhookTargets: WebhookTarget[] = [];
+
+  for (const target of targets) {
+    // 官网类型或有webhookConfig的走Webhook推送
+    if (target.platformCategory === PlatformCategory.OFFICIAL_SITE || 
+        target.platform === 'official_site' ||
+        target.webhookConfig) {
+      if (target.webhookConfig?.url) {
+        webhookTargets.push({
+          accountId: target.accountId,
+          accountName: target.accountName,
+          webhookConfig: target.webhookConfig,
+        });
+      }
+    } else {
+      // 其他走浏览器发布
+      browserTargets.push({
+        platform: target.platform,
+        accountId: target.accountId,
+        accountName: target.accountName,
+      });
+    }
+  }
+
+  return { browserTargets, webhookTargets };
+}
+
+/**
  * 创建发布任务
+ * 兼容现有数据库结构：优先使用新字段，如果不存在则降级
  */
 export async function createPublishTask(input: CreatePublishTaskInput): Promise<PublishTask> {
   const client = getSupabaseClient();
   
-  const taskData = {
+  // 自动分离目标平台（代码层面处理）
+  const { browserTargets: separatedBrowserTargets, webhookTargets: separatedWebhookTargets } = separateTargets(input.targetPlatforms);
+  
+  // 构建任务数据 - 使用现有字段
+  const taskData: Record<string, any> = {
     business_id: input.businessId,
     plan_id: input.planId,
     draft_id: input.draftId,
@@ -324,7 +409,35 @@ export async function createPublishTask(input: CreatePublishTaskInput): Promise<
     throw error;
   }
 
-  return transformPublishTask(task);
+  const result = transformPublishTask(task);
+  
+  // 如果有Webhook目标，触发服务端Webhook推送
+  if (separatedWebhookTargets.length > 0) {
+    // 异步触发Webhook推送，不阻塞返回
+    triggerWebhookPush(task.id).catch(err => {
+      console.error('触发Webhook推送失败:', err);
+    });
+  }
+
+  return result;
+}
+
+/**
+ * 触发服务端Webhook推送
+ */
+async function triggerWebhookPush(taskId: string): Promise<void> {
+  try {
+    const response = await fetch(`${process.env.COZE_PROJECT_DOMAIN_DEFAULT || ''}/api/publish-tasks/${taskId}/webhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    
+    if (!response.ok) {
+      console.error('触发Webhook推送失败:', response.status);
+    }
+  } catch (error) {
+    console.error('触发Webhook推送请求失败:', error);
+  }
 }
 
 /**
@@ -335,31 +448,43 @@ export async function batchCreatePublishTasks(
 ): Promise<PublishTask[]> {
   const client = getSupabaseClient();
   
-  const tasksData = inputs.map(input => ({
-    business_id: input.businessId,
-    draft_id: input.draftId,
-    task_name: input.taskName,
-    task_type: input.taskType || 'scheduled',
-    priority: input.priority || 5,
-    title: input.title,
-    content: input.content,
-    images: input.images || [],
-    tags: input.tags || [],
-    target_platforms: input.targetPlatforms,
-    scheduled_at: input.scheduledAt?.toISOString(),
-    recurring_rule: input.recurringRule,
-    status: 'pending' as const,
-    progress: 0,
-    total_platforms: input.targetPlatforms.length,
-    published_platforms: 0,
-    failed_platforms: 0,
-    results: [],
-    max_retries: input.maxRetries || 3,
-    retry_delay: input.retryDelay || 60,
-    notify_on_complete: input.notifyOnComplete ?? true,
-    notify_on_fail: input.notifyOnFail ?? true,
-    metadata: input.metadata || {},
-  }));
+  const tasksData = inputs.map(input => {
+    // 自动分离目标平台
+    const { browserTargets, webhookTargets } = separateTargets(input.targetPlatforms);
+    
+    return {
+      business_id: input.businessId,
+      plan_id: input.planId,
+      draft_id: input.draftId,
+      task_name: input.taskName,
+      task_type: input.taskType || 'scheduled',
+      priority: input.priority || 5,
+      title: input.title,
+      content: input.content,
+      images: input.images || [],
+      tags: input.tags || [],
+      target_platforms: input.targetPlatforms,
+      browser_targets: browserTargets,
+      webhook_targets: webhookTargets,
+      scheduled_at: input.scheduledAt?.toISOString(),
+      recurring_rule: input.recurringRule,
+      status: 'pending' as const,
+      progress: 0,
+      total_platforms: input.targetPlatforms.length,
+      published_platforms: 0,
+      failed_platforms: 0,
+      browser_status: browserTargets.length > 0 ? 'pending' : null,
+      webhook_status: webhookTargets.length > 0 ? 'pending' : null,
+      results: [],
+      webhook_results: [],
+      max_retries: input.maxRetries || 3,
+      retry_delay: input.retryDelay || 60,
+      webhook_max_retries: input.maxRetries || 3,
+      notify_on_complete: input.notifyOnComplete ?? true,
+      notify_on_fail: input.notifyOnFail ?? true,
+      metadata: input.metadata || {},
+    };
+  });
 
   const { data: tasks, error } = await client
     .from('publish_tasks')
@@ -371,7 +496,18 @@ export async function batchCreatePublishTasks(
     throw error;
   }
 
-  return (tasks || []).map(transformPublishTask);
+  const results = (tasks || []).map(transformPublishTask);
+  
+  // 异步触发Webhook推送
+  results.forEach(task => {
+    if (task.webhookTargets && task.webhookTargets.length > 0) {
+      triggerWebhookPush(task.id).catch(err => {
+        console.error('触发Webhook推送失败:', err);
+      });
+    }
+  });
+
+  return results;
 }
 
 /**
@@ -587,6 +723,8 @@ function transformPublishTask(dbRecord: any): PublishTask {
     images: dbRecord.images || [],
     tags: dbRecord.tags || [],
     targetPlatforms: dbRecord.target_platforms || [],
+    browserTargets: dbRecord.browser_targets || [],
+    webhookTargets: dbRecord.webhook_targets || [],
     scheduledAt: dbRecord.scheduled_at ? new Date(dbRecord.scheduled_at) : undefined,
     recurringRule: dbRecord.recurring_rule,
     status: dbRecord.status,
@@ -594,13 +732,24 @@ function transformPublishTask(dbRecord: any): PublishTask {
     totalPlatforms: dbRecord.total_platforms,
     publishedPlatforms: dbRecord.published_platforms,
     failedPlatforms: dbRecord.failed_platforms,
+    browserStatus: dbRecord.browser_status,
+    browserProgress: dbRecord.browser_progress,
+    browserStartedAt: dbRecord.browser_started_at ? new Date(dbRecord.browser_started_at) : undefined,
+    browserCompletedAt: dbRecord.browser_completed_at ? new Date(dbRecord.browser_completed_at) : undefined,
+    webhookStatus: dbRecord.webhook_status,
+    webhookProgress: dbRecord.webhook_progress,
+    webhookStartedAt: dbRecord.webhook_started_at ? new Date(dbRecord.webhook_started_at) : undefined,
+    webhookCompletedAt: dbRecord.webhook_completed_at ? new Date(dbRecord.webhook_completed_at) : undefined,
     results: dbRecord.results || [],
+    webhookResults: dbRecord.webhook_results || [],
     startedAt: dbRecord.started_at ? new Date(dbRecord.started_at) : undefined,
     completedAt: dbRecord.completed_at ? new Date(dbRecord.completed_at) : undefined,
     error: dbRecord.error,
     retryCount: dbRecord.retry_count,
     maxRetries: dbRecord.max_retries,
     retryDelay: dbRecord.retry_delay,
+    webhookRetryCount: dbRecord.webhook_retry_count,
+    webhookMaxRetries: dbRecord.webhook_max_retries,
     notifyOnComplete: dbRecord.notify_on_complete,
     notifyOnFail: dbRecord.notify_on_fail,
     metadata: dbRecord.metadata || {},

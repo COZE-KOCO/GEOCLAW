@@ -136,9 +136,11 @@ export function DownloadPage() {
               返回首页
             </Link>
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
-                <Sparkles className="h-4 w-4 text-white" />
-              </div>
+              <img 
+                src="/logo.png" 
+                alt="GEO" 
+                className="w-8 h-8 object-contain"
+              />
               <span className="font-bold text-gray-900 dark:text-white">GEO优化平台</span>
             </div>
           </div>

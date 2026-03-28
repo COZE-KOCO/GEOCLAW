@@ -16,7 +16,6 @@ export type ModuleId =
   | 'type' 
   | 'image' 
   | 'content' 
-  | 'persona' 
   | 'replace' 
   | 'knowledge' 
   | 'format' 
@@ -40,7 +39,6 @@ export const CONFIG_MODULES: ConfigModule[] = [
   { id: 'type', title: '创作类型', icon: () => null, defaultOpen: true },
   { id: 'image', title: '图片', icon: () => null, defaultOpen: false },
   { id: 'content', title: '内容要求', icon: () => null, defaultOpen: false },
-  { id: 'persona', title: '拟人化', icon: () => null, defaultOpen: false },
   { id: 'replace', title: '全文替换', icon: () => null, defaultOpen: false },
   { id: 'knowledge', title: '知识库', icon: () => null, defaultOpen: false },
   { id: 'format', title: '内容格式', icon: () => null, defaultOpen: false },

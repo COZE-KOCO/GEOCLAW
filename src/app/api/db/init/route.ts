@@ -8,6 +8,46 @@ import { getSupabaseClient } from '@/storage/database/supabase-client';
 
 // 创建表的 SQL 语句
 const CREATE_TABLES_SQL = `
+-- 平台选择器配置表
+CREATE TABLE IF NOT EXISTS platform_selectors (
+  id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+  platform VARCHAR(50) NOT NULL UNIQUE,
+  platform_name VARCHAR(100) NOT NULL,
+  version VARCHAR(20) DEFAULT '1.0.0',
+  publish_url VARCHAR(500) NOT NULL,
+  selector_types JSONB DEFAULT '[]',
+  selectors JSONB NOT NULL,
+  settings JSONB DEFAULT '{}',
+  prepare_script TEXT,
+  verify_script TEXT,
+  total_attempts INTEGER DEFAULT 0,
+  successful_attempts INTEGER DEFAULT 0,
+  success_rate VARCHAR(10) DEFAULT '0',
+  is_active BOOLEAN DEFAULT TRUE,
+  is_default BOOLEAN DEFAULT FALSE,
+  metadata JSONB DEFAULT '{}',
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 选择器执行日志表
+CREATE TABLE IF NOT EXISTS selector_execution_logs (
+  id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+  config_id VARCHAR(36) NOT NULL,
+  platform VARCHAR(50) NOT NULL,
+  target_type VARCHAR(50) NOT NULL,
+  selector VARCHAR(500) NOT NULL,
+  success BOOLEAN DEFAULT FALSE,
+  found BOOLEAN DEFAULT FALSE,
+  filled BOOLEAN DEFAULT FALSE,
+  verified BOOLEAN DEFAULT FALSE,
+  execution_time INTEGER DEFAULT 0,
+  error TEXT,
+  debug_info JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- 企业/商家表
 CREATE TABLE IF NOT EXISTS businesses (
   id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -27,6 +67,7 @@ CREATE TABLE IF NOT EXISTS businesses (
   business_hours JSONB,
   brand_keywords JSONB DEFAULT '[]',
   target_keywords JSONB DEFAULT '[]',
+  owner_id VARCHAR(36), -- 企业所有者ID（用户ID）
   status VARCHAR(20) NOT NULL DEFAULT 'active',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -37,27 +78,13 @@ CREATE TABLE IF NOT EXISTS matrix_accounts (
   id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
   business_id VARCHAR(36) NOT NULL,
   platform VARCHAR(50) NOT NULL,
+  platform_category VARCHAR(20) NOT NULL DEFAULT 'platform',
   account_name VARCHAR(100) NOT NULL,
   display_name VARCHAR(100) NOT NULL,
   avatar VARCHAR(500),
   followers INTEGER NOT NULL DEFAULT 0,
   status VARCHAR(20) NOT NULL DEFAULT 'active',
-  persona_id VARCHAR(36),
   metadata JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 人设表
-CREATE TABLE IF NOT EXISTS personas (
-  id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
-  business_id VARCHAR(36) NOT NULL,
-  name VARCHAR(100) NOT NULL,
-  expertise TEXT NOT NULL,
-  tone VARCHAR(50) NOT NULL,
-  style VARCHAR(50) NOT NULL,
-  writing_style TEXT,
-  example_content TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -139,6 +166,9 @@ CREATE TABLE IF NOT EXISTS publish_tasks (
   images JSONB DEFAULT '[]',
   tags JSONB DEFAULT '[]',
   target_platforms JSONB NOT NULL DEFAULT '[]',
+  -- 分离的发布目标
+  browser_targets JSONB DEFAULT '[]',
+  webhook_targets JSONB DEFAULT '[]',
   scheduled_at TIMESTAMPTZ,
   recurring_rule VARCHAR(100),
   status VARCHAR(20) NOT NULL DEFAULT 'pending',
@@ -146,13 +176,26 @@ CREATE TABLE IF NOT EXISTS publish_tasks (
   total_platforms INTEGER NOT NULL DEFAULT 0,
   published_platforms INTEGER NOT NULL DEFAULT 0,
   failed_platforms INTEGER NOT NULL DEFAULT 0,
+  -- 浏览器发布状态
+  browser_status VARCHAR(20),
+  browser_progress INTEGER DEFAULT 0,
+  browser_started_at TIMESTAMPTZ,
+  browser_completed_at TIMESTAMPTZ,
+  -- Webhook推送状态
+  webhook_status VARCHAR(20),
+  webhook_progress INTEGER DEFAULT 0,
+  webhook_started_at TIMESTAMPTZ,
+  webhook_completed_at TIMESTAMPTZ,
   results JSONB DEFAULT '[]',
+  webhook_results JSONB DEFAULT '[]',
   started_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
   error TEXT,
   retry_count INTEGER NOT NULL DEFAULT 0,
   max_retries INTEGER NOT NULL DEFAULT 3,
   retry_delay INTEGER NOT NULL DEFAULT 60,
+  webhook_retry_count INTEGER DEFAULT 0,
+  webhook_max_retries INTEGER DEFAULT 3,
   notify_on_complete BOOLEAN NOT NULL DEFAULT TRUE,
   notify_on_fail BOOLEAN NOT NULL DEFAULT TRUE,
   metadata JSONB DEFAULT '{}',
@@ -340,9 +383,8 @@ CREATE INDEX IF NOT EXISTS businesses_status_idx ON businesses(status);
 
 CREATE INDEX IF NOT EXISTS matrix_accounts_business_id_idx ON matrix_accounts(business_id);
 CREATE INDEX IF NOT EXISTS matrix_accounts_platform_idx ON matrix_accounts(platform);
+CREATE INDEX IF NOT EXISTS matrix_accounts_platform_category_idx ON matrix_accounts(platform_category);
 CREATE INDEX IF NOT EXISTS matrix_accounts_status_idx ON matrix_accounts(status);
-
-CREATE INDEX IF NOT EXISTS personas_business_id_idx ON personas(business_id);
 
 CREATE INDEX IF NOT EXISTS content_drafts_business_id_idx ON content_drafts(business_id);
 CREATE INDEX IF NOT EXISTS content_drafts_status_idx ON content_drafts(status);
@@ -362,6 +404,8 @@ CREATE INDEX IF NOT EXISTS publish_tasks_draft_id_idx ON publish_tasks(draft_id)
 CREATE INDEX IF NOT EXISTS publish_tasks_status_idx ON publish_tasks(status);
 CREATE INDEX IF NOT EXISTS publish_tasks_scheduled_at_idx ON publish_tasks(scheduled_at);
 CREATE INDEX IF NOT EXISTS publish_tasks_task_type_idx ON publish_tasks(task_type);
+CREATE INDEX IF NOT EXISTS publish_tasks_browser_status_idx ON publish_tasks(browser_status);
+CREATE INDEX IF NOT EXISTS publish_tasks_webhook_status_idx ON publish_tasks(webhook_status);
 
 CREATE INDEX IF NOT EXISTS geo_citations_date_idx ON geo_citations(date);
 CREATE INDEX IF NOT EXISTS geo_citations_project_id_idx ON geo_citations(project_id);
@@ -384,6 +428,17 @@ CREATE INDEX IF NOT EXISTS geo_analysis_tasks_created_at_idx ON geo_analysis_tas
 CREATE INDEX IF NOT EXISTS geo_analysis_results_task_id_idx ON geo_analysis_results(task_id);
 CREATE INDEX IF NOT EXISTS geo_analysis_results_platform_idx ON geo_analysis_results(platform);
 CREATE INDEX IF NOT EXISTS geo_analysis_results_cited_idx ON geo_analysis_results(cited);
+
+-- platform_selectors 索引
+CREATE INDEX IF NOT EXISTS platform_selectors_platform_idx ON platform_selectors(platform);
+CREATE INDEX IF NOT EXISTS platform_selectors_is_active_idx ON platform_selectors(is_active);
+CREATE INDEX IF NOT EXISTS platform_selectors_is_default_idx ON platform_selectors(is_default);
+
+-- selector_execution_logs 索引
+CREATE INDEX IF NOT EXISTS selector_execution_logs_config_id_idx ON selector_execution_logs(config_id);
+CREATE INDEX IF NOT EXISTS selector_execution_logs_platform_idx ON selector_execution_logs(platform);
+CREATE INDEX IF NOT EXISTS selector_execution_logs_target_type_idx ON selector_execution_logs(target_type);
+CREATE INDEX IF NOT EXISTS selector_execution_logs_created_at_idx ON selector_execution_logs(created_at);
 
 -- creation_plans 索引
 CREATE INDEX IF NOT EXISTS creation_plans_business_id_idx ON creation_plans(business_id);
@@ -448,9 +503,10 @@ export async function POST(request: NextRequest) {
     // 这里我们尝试逐个创建表
 
     const tables = [
+      'platform_selectors',
+      'selector_execution_logs',
       'businesses',
       'matrix_accounts',
-      'personas',
       'content_drafts',
       'publish_records',
       'publish_plans',

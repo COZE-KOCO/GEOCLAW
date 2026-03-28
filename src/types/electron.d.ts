@@ -151,6 +151,85 @@ export interface ElectronAPI {
   
   // 立即执行任务
   executeTaskImmediately: (taskId: string) => Promise<{ success: boolean; error?: string }>;
+  
+  // 创作调度器相关
+  getCreationSchedulerStatus: () => Promise<{
+    isRunning: boolean;
+    currentProgress: {
+      planId: string;
+      planName: string;
+      status: string;
+      progress: number;
+      createdCount: number;
+      totalCount: number;
+    } | null;
+    scheduledCount?: number;
+    lastRescheduleTime?: string | null;
+  }>;
+  
+  triggerCreationSchedulerCheck: () => Promise<{ success: boolean }>;
+  
+  toggleCreationScheduler: (enable: boolean) => Promise<{ success: boolean }>;
+  
+  onCreationSchedulerStatus: (callback: (status: { status: string; checkInterval?: number }) => void) => () => void;
+  
+  onCreationPlanStarted: (callback: (data: {
+    planId: string;
+    planName: string;
+    totalCount: number;
+  }) => void) => () => void;
+  
+  onCreationTaskProgress: (callback: (data: {
+    planId: string;
+    current: number;
+    total: number;
+    keyword: string;
+  }) => void) => () => void;
+  
+  onCreationPlanCompleted: (callback: (data: {
+    planId: string;
+    planName: string;
+    createdCount: number;
+    totalCount: number;
+    completedAt: string;
+  }) => void) => () => void;
+  
+  onCreationPlanFailed: (callback: (data: {
+    planId: string;
+    planName: string;
+    error: string;
+  }) => void) => () => void;
+  
+  onPublishTaskProgress: (callback: (data: {
+    planId: string;
+    taskId: string;
+    current: number;
+    total: number;
+    articleTitle?: string;
+    platform?: string;
+    status: 'pending' | 'publishing' | 'completed' | 'failed';
+    message?: string;
+  }) => void) => () => void;
+  
+  // 创作计划调度管理
+  notifyCreationPlanCreated: (planId: string, planName: string, executeTime: string) => Promise<{ success: boolean }>;
+  
+  notifyCreationPlanDeleted: (planId: string) => Promise<{ success: boolean }>;
+  
+  notifyCreationPlanUpdated: (planId: string, planName: string, executeTime: string) => Promise<{ success: boolean }>;
+  
+  refreshCreationScheduler: () => Promise<{ success: boolean }>;
+  
+  getScheduledPlans: () => Promise<Array<{ planId: string; planName: string; executeTime: string }>>;
+  
+  onCreationSchedulerUpdated: (callback: (data: {
+    action: 'add' | 'remove' | 'rescheduleAll';
+    planId?: string;
+    planName?: string;
+    executeTime?: string;
+    scheduledCount: number;
+    plans?: Array<{ planId: string; planName: string; executeTime: string }>;
+  }) => void) => () => void;
 }
 
 // 扩展Window接口

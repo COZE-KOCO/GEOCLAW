@@ -27,10 +27,10 @@ export type { ModuleWrapperProps } from './shared/ModuleWrapper';
 // 配置模块组件
 export { BasicSettings } from './modules/BasicSettings';
 export { ModelSelector } from './modules/ModelSelector';
+export { ModelSelectionMode } from './modules/ModelSelectionMode';
 export { ArticleTypeModule } from './modules/ArticleTypeModule';
 export { ImageSettings } from './modules/ImageSettings';
 export { ContentRequirements } from './modules/ContentRequirements';
-export { PersonaSettings } from './modules/PersonaSettings';
 export { ReplacementSettings } from './modules/ReplacementSettings';
 export { KnowledgeBaseModule } from './modules/KnowledgeBase';
 export { ContentFormat } from './modules/ContentFormat';

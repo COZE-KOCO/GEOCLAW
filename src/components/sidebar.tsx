@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, 
   Sparkles, 
@@ -21,6 +21,7 @@ import {
   Images,
   KeyRound,
   Layers,
+  FileCheck,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -47,8 +48,8 @@ const navGroups = [
     items: [
       { href: '/auto-publish', label: '全自动创作发布', icon: Sparkles },
       { href: '/publish-tasks', label: '自动发布', icon: Calendar },
+      { href: '/published-articles', label: '发布的文章', icon: FileCheck },
       { href: '/accounts', label: '账号管理', icon: Users },
-      { href: '/personas', label: '人设管理', icon: Network },
     ],
   },
   {
@@ -86,9 +87,9 @@ export function Sidebar({ className, collapsed = false, onToggle }: SidebarProps
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['内容', '运营', 'GEO优化']);
   const [inElectron, setInElectron] = useState(false);
 
-  useState(() => {
+  useEffect(() => {
     setInElectron(isElectron());
-  });
+  }, []);
 
   const toggleGroup = (title: string) => {
     if (!title) return;
@@ -110,9 +111,11 @@ export function Sidebar({ className, collapsed = false, onToggle }: SidebarProps
       {/* Logo区域 */}
       <div className="h-14 flex items-center px-4 border-b border-slate-200 dark:border-slate-800">
         <Link href="/dashboard" className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500 to-purple-600 flex items-center justify-center flex-shrink-0">
-            <Sparkles className="h-4 w-4 text-white" />
-          </div>
+          <img 
+            src="/logo.png" 
+            alt="GEO" 
+            className="w-8 h-8 object-contain flex-shrink-0"
+          />
           {!collapsed && (
             <div className="flex items-center gap-2">
               <span className="text-base font-bold text-slate-800 dark:text-white">

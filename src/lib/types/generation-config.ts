@@ -26,6 +26,9 @@ export type RankingDisplay = 'random' | 'sequential' | 'reverse' | 'grouped';
 /** 图片来源 */
 export type ImageSource = 'stock' | 'ai' | 'upload' | 'none';
 
+/** 模型选择模式 */
+export type ModelSelectionMode = 'fixed' | 'random' | 'weighted';
+
 // ==================== 子配置类型 ====================
 
 /** 全文替换规则 */
@@ -153,11 +156,6 @@ export interface GenerationConfig {
   /** 内容包含关键词 */
   contentIncludeKeywords: string;
   
-  // ========== 拟人化 ==========
-  
-  /** 拟人化设置ID */
-  personaId?: string;
-  
   // ========== 全文替换 ==========
   
   /** 全文替换规则列表 */
@@ -246,8 +244,17 @@ export interface GenerationConfig {
   
   // ========== 生成设置 ==========
   
-  /** AI模型 */
+  /** AI模型（固定模式时使用） */
   model: string;
+  
+  /** 模型选择模式 */
+  modelSelectionMode: ModelSelectionMode;
+  
+  /** 模型池（随机/加权模式时使用） */
+  modelPool: string[];
+  
+  /** 模型权重（加权模式时使用，key 为模型ID，value 为权重百分比） */
+  modelWeights: Record<string, number>;
   
   /** 生成文章数量 */
   articleCount: number;
@@ -290,9 +297,9 @@ export const defaultGenerationConfig: GenerationConfig = {
   competitors: '',
   
   // 图片设置
-  imageSource: 'stock',
+  imageSource: 'none',
   imageFilter: 'all',
-  enableThumbnail: true,
+  enableThumbnail: false,
   enableContentImages: false,
   imageCount: 3,
   
@@ -306,14 +313,11 @@ export const defaultGenerationConfig: GenerationConfig = {
   customInstructions: '',
   contentIncludeKeywords: '',
   
-  // 拟人化
-  personaId: undefined,
-  
   // 全文替换
   replacements: [],
   
   // 知识库
-  enableWebSearch: false,
+  enableWebSearch: true,
   knowledgeBaseId: undefined,
   
   // 内容格式
@@ -327,7 +331,7 @@ export const defaultGenerationConfig: GenerationConfig = {
   enableSummary: true,
   enableConclusion: true,
   enableFaq: false,
-  articleSize: 'long',
+  articleSize: 'short',
   enableAutoTitle: true,
   customTitle: '',
   
@@ -349,6 +353,12 @@ export const defaultGenerationConfig: GenerationConfig = {
   
   // 生成设置
   model: 'doubao-seed-1-8-251228',
+  modelSelectionMode: 'fixed',
+  modelPool: ['doubao-seed-1-8-251228', 'doubao-seed-2-0-lite-260215'],
+  modelWeights: {
+    'doubao-seed-1-8-251228': 70,
+    'doubao-seed-2-0-lite-260215': 30,
+  },
   articleCount: 1,
 };
 
@@ -438,13 +448,19 @@ export function mergeGenerationConfig(
  * 验证配置是否完整
  * 
  * @param config 配置对象
+ * @param strict 是否严格验证（默认 false，创建计划时不强制验证关键词）
  * @returns 验证结果
  */
-export function validateGenerationConfig(config: GenerationConfig): {
+export function validateGenerationConfig(
+  config: GenerationConfig,
+  strict: boolean = false
+): {
   valid: boolean;
   errors: string[];
+  warnings: string[];
 } {
   const errors: string[] = [];
+  const warnings: string[] = [];
   
   // 辅助函数：检查关键词是否有效
   const hasValidKeywords = (keywords: unknown): boolean => {
@@ -455,25 +471,42 @@ export function validateGenerationConfig(config: GenerationConfig): {
   };
   
   // 根据生成方式验证必填项
+  // 非严格模式下，只返回警告，不阻止保存
   switch (config.generateMethod) {
     case 'keyword':
       if (!hasValidKeywords(config.keywords)) {
-        errors.push('关键词方式需要输入关键词');
+        if (strict) {
+          errors.push('关键词方式需要输入关键词');
+        } else {
+          warnings.push('尚未配置关键词，计划创建后需要添加关键词才能生成内容');
+        }
       }
       break;
     case 'keyword-library':
       if (!config.keywordLibraryId) {
-        errors.push('关键词库方式需要选择关键词库');
+        if (strict) {
+          errors.push('关键词库方式需要选择关键词库');
+        } else {
+          warnings.push('尚未选择关键词库，计划创建后需要选择才能生成内容');
+        }
       }
       break;
     case 'title':
       if (!hasValidKeywords(config.keywords)) {
-        errors.push('标题方式需要输入标题列表');
+        if (strict) {
+          errors.push('标题方式需要输入标题列表');
+        } else {
+          warnings.push('尚未配置标题列表，计划创建后需要添加才能生成内容');
+        }
       }
       break;
     case 'description':
       if (!config.description?.trim()) {
-        errors.push('描述方式需要输入文章描述');
+        if (strict) {
+          errors.push('描述方式需要输入文章描述');
+        } else {
+          warnings.push('尚未配置文章描述，计划创建后需要添加才能生成内容');
+        }
       }
       break;
   }
@@ -481,5 +514,56 @@ export function validateGenerationConfig(config: GenerationConfig): {
   return {
     valid: errors.length === 0,
     errors,
+    warnings,
   };
+}
+
+/**
+ * 根据模型选择模式获取要使用的模型
+ * 
+ * @param config 生成配置
+ * @param articleIndex 文章索引（用于随机模式的一致性）
+ * @returns 模型ID
+ */
+export function selectModel(
+  config: Pick<GenerationConfig, 'model' | 'modelSelectionMode' | 'modelPool' | 'modelWeights'>,
+  articleIndex?: number
+): string {
+  const { model, modelSelectionMode, modelPool, modelWeights } = config;
+  
+  switch (modelSelectionMode) {
+    case 'fixed':
+      // 固定模式：始终使用指定模型
+      return model;
+      
+    case 'random':
+      // 随机模式：从模型池随机选择
+      if (modelPool && modelPool.length > 0) {
+        const randomIndex = articleIndex !== undefined
+          ? (articleIndex + Math.floor(Math.random() * 1000)) % modelPool.length
+          : Math.floor(Math.random() * modelPool.length);
+        return modelPool[randomIndex];
+      }
+      return model;
+      
+    case 'weighted':
+      // 加权模式：按权重随机选择
+      if (modelWeights && Object.keys(modelWeights).length > 0) {
+        const entries = Object.entries(modelWeights);
+        const totalWeight = entries.reduce((sum, [, weight]) => sum + weight, 0);
+        let random = Math.random() * totalWeight;
+        
+        for (const [modelId, weight] of entries) {
+          random -= weight;
+          if (random <= 0) {
+            return modelId;
+          }
+        }
+        return entries[0][0];
+      }
+      return model;
+      
+    default:
+      return model;
+  }
 }

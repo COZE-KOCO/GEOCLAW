@@ -9,7 +9,7 @@ echo "Installing dependencies..."
 pnpm install --prefer-frozen-lockfile --prefer-offline --loglevel debug --reporter=append-only
 
 echo "Building the project..."
-npx next build
+pnpm next build
 
 # 清理不需要的依赖以减小产物大小（Web 部署不需要 Electron 相关包）
 echo "Cleaning up unnecessary dependencies for web deployment..."

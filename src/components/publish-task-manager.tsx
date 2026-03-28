@@ -53,6 +53,7 @@ import {
   Settings,
   ShieldCheck,
   ShieldAlert,
+  Webhook,
 } from 'lucide-react';
 import { PublishPlanCreator } from './publish-plan-creator';
 
@@ -122,7 +123,7 @@ const frequencyLabels: Record<Frequency, string> = {
 };
 
 // 平台信息
-const platformInfo: Record<string, { name: string; icon: string; autoType?: string }> = {
+const platformInfo: Record<string, { name: string; icon: string; autoType?: string; category?: string }> = {
   zhihu: { name: '知乎', icon: '知', autoType: 'api' },
   xiaohongshu: { name: '小红书', icon: '红', autoType: 'automation' },
   wechat: { name: '微信公众号', icon: '微', autoType: 'api' },
@@ -131,6 +132,7 @@ const platformInfo: Record<string, { name: string; icon: string; autoType?: stri
   douyin: { name: '抖音', icon: '抖', autoType: 'automation' },
   weibo: { name: '微博', icon: '微', autoType: 'api' },
   bilibili: { name: 'B站', icon: 'B', autoType: 'api' },
+  official_site: { name: '官网', icon: '官', category: 'webhook' },
 };
 
 // 星期名称
@@ -246,10 +248,12 @@ export function PublishTaskManager({ businessId }: PublishTaskManagerProps) {
 
     // 任务完成
     const unsubCompleted = window.electronAPI.onTaskCompleted((data) => {
+      console.log('[PublishTaskManager] 任务完成回调:', data);
       setRealtimeTask({
         taskId: data.taskId,
         taskName: data.taskName,
-        status: 'completed',
+        // 根据 success 字段判断是成功还是失败
+        status: data.success ? 'completed' : 'failed',
         results: data.results,
       });
       // 刷新计划列表
@@ -649,28 +653,81 @@ export function PublishTaskManager({ businessId }: PublishTaskManagerProps) {
                           </p>
                         </div>
                         
-                        {/* 发布账号 */}
+                        {/* 发布账号 - 分离显示 */}
                         <div>
                           <h5 className="font-medium mb-2">发布账号</h5>
-                          <div className="flex flex-wrap gap-2">
-                            {plan.targetPlatforms.map((target, idx) => {
-                              const info = platformInfo[target.platform] || { name: target.platform, icon: '?' };
-                              return (
-                                <Badge key={idx} variant="secondary" className="flex items-center gap-1">
-                                  <span className="w-5 h-5 rounded bg-primary/10 flex items-center justify-center text-xs">
-                                    {info.icon}
-                                  </span>
-                                  {info.name} - {target.accountName || '账号'}
-                                  {info.autoType === 'api' && (
-                                    <span title="支持API自动发布"><ShieldCheck className="h-3 w-3 text-green-500 ml-1" /></span>
-                                  )}
-                                  {info.autoType === 'automation' && (
-                                    <span title="需要配置授权"><Settings className="h-3 w-3 text-yellow-500 ml-1" /></span>
-                                  )}
-                                </Badge>
-                              );
-                            })}
-                          </div>
+                          {(() => {
+                            // 分离目标平台
+                            const browserTargets = plan.targetPlatforms.filter(
+                              t => t.platform !== 'official_site' && (t as any).platformCategory !== 'official_site'
+                            );
+                            const webhookTargets = plan.targetPlatforms.filter(
+                              t => t.platform === 'official_site' || (t as any).platformCategory === 'official_site'
+                            );
+                            
+                            return (
+                              <div className="space-y-3">
+                                {/* 浏览器发布目标 */}
+                                {browserTargets.length > 0 && (
+                                  <div>
+                                    <div className="flex items-center gap-2 mb-2">
+                                      <ShieldCheck className="h-4 w-4 text-blue-500" />
+                                      <span className="text-sm font-medium text-slate-600 dark:text-slate-400">
+                                        浏览器发布 ({browserTargets.length})
+                                      </span>
+                                      {isElectron && (
+                                        <span className="text-xs text-slate-400">由桌面端执行</span>
+                                      )}
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                      {browserTargets.map((target, idx) => {
+                                        const info = platformInfo[target.platform] || { name: target.platform, icon: '?' };
+                                        return (
+                                          <Badge key={idx} variant="secondary" className="flex items-center gap-1">
+                                            <span className="w-5 h-5 rounded bg-primary/10 flex items-center justify-center text-xs">
+                                              {info.icon}
+                                            </span>
+                                            {info.name} - {target.accountName || '账号'}
+                                            {info.autoType === 'api' && (
+                                              <span title="支持API自动发布"><ShieldCheck className="h-3 w-3 text-green-500 ml-1" /></span>
+                                            )}
+                                            {info.autoType === 'automation' && (
+                                              <span title="需要配置授权"><Settings className="h-3 w-3 text-yellow-500 ml-1" /></span>
+                                            )}
+                                          </Badge>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {/* Webhook推送目标 */}
+                                {webhookTargets.length > 0 && (
+                                  <div>
+                                    <div className="flex items-center gap-2 mb-2">
+                                      <Webhook className="h-4 w-4 text-purple-500" />
+                                      <span className="text-sm font-medium text-slate-600 dark:text-slate-400">
+                                        官网推送 ({webhookTargets.length})
+                                      </span>
+                                      <span className="text-xs text-slate-400">由服务端执行</span>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                      {webhookTargets.map((target, idx) => {
+                                        const info = platformInfo[target.platform] || platformInfo.official_site;
+                                        return (
+                                          <Badge key={idx} variant="outline" className="flex items-center gap-1 border-purple-200 text-purple-700">
+                                            <Webhook className="h-3 w-3" />
+                                            {target.accountName || '官网'}
+                                            <span title="Webhook推送"><CheckCircle2 className="h-3 w-3 text-purple-500 ml-1" /></span>
+                                          </Badge>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                         
                         {/* 执行历史 */}

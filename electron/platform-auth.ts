@@ -176,18 +176,32 @@ export class PlatformAuthManager {
 
     this.writeLog(`[Electron] 关键 Cookie 验证通过，开始保存账号...`);
 
-    // 保存账号 - 使用 Node.js 原生 https 模块发送请求
-    // 这是最可靠的方式，不依赖 Electron 的网络层
+    // 保存账号 - 使用 electron.net 模块发送请求
+    // 这样可以共享主窗口的 session，自动携带认证 cookie
     try {
       // 准备请求数据 - 符合 API 的 CreateAccountInput 格式
       const cookieObj: Record<string, string> = {};
       cookies.forEach(c => { cookieObj[c.name] = c.value; });
       
+      // 获取真实用户信息 - 从登录窗口 DOM 中提取
+      this.writeLog(`[Electron] 开始从登录窗口获取平台用户信息...`);
+      const userInfo = await this.fetchPlatformUserInfo(loginWindow, platform);
+      this.writeLog(`[Electron] 获取到的用户信息: ${JSON.stringify(userInfo)}`);
+      
+      // 如果获取到了用户名，使用真实用户名，否则使用默认名称
+      const displayName = userInfo.name || `${config.name}用户`;
+      const avatar = userInfo.avatar || undefined;
+      const fansCount = userInfo.fansCount || 0;
+      
+      this.writeLog(`[Electron] 最终显示名称: ${displayName}`);
+      
       const requestBody = JSON.stringify({
         businessId: this.currentBusinessId,
         platform: platform,
-        accountName: `${config.name}用户`,
-        displayName: `${config.name}用户`,
+        accountName: displayName,
+        displayName: displayName,
+        avatar: avatar,
+        followers: fansCount,
         status: 'active',
         metadata: {
           platformData: cookieObj,
@@ -195,12 +209,15 @@ export class PlatformAuthManager {
         },
       });
 
-      this.writeLog(`[Electron] 准备使用 Node.js https 模块发送请求`);
+      this.writeLog(`[Electron] 准备使用桌面端专用 API`);
       this.writeLog(`[Electron] API地址: ${this.apiBaseUrl}`);
       this.writeLog(`[Electron] 请求体: ${requestBody}`);
 
-      // 使用 Node.js 原生 https 模块发送请求
-      const response = await this.sendHttpRequest('/api/accounts', 'POST', requestBody);
+      // 使用桌面端专用 API，不需要认证
+      const response = await this.callAPI('/api/accounts', {
+        method: 'POST',
+        body: requestBody,
+      });
       const account = response.account;  // API 返回 { account: {...} }
       
       this.writeLog(`[Electron] 账号保存成功: ${JSON.stringify(account)}`);
@@ -382,9 +399,15 @@ export class PlatformAuthManager {
       cookies: cookies.map(c => c.name),
     };
   }
-
   // 加载配置
   private loadConfig(): AppConfig {
+    // 优先使用环境变量 ELECTRON_SERVER_URL
+    if (process.env.ELECTRON_SERVER_URL) {
+      console.log('[Electron] 使用环境变量 ELECTRON_SERVER_URL:', process.env.ELECTRON_SERVER_URL);
+      return { apiBaseUrl: process.env.ELECTRON_SERVER_URL };
+    }
+
+    // 兼容旧的环境变量名
     if (process.env.API_BASE_URL) {
       console.log('[Electron] 使用环境变量 API_BASE_URL:', process.env.API_BASE_URL);
       return { apiBaseUrl: process.env.API_BASE_URL };
@@ -413,7 +436,7 @@ export class PlatformAuthManager {
     }
 
     // 生产环境：使用远程服务器地址
-    const prodUrl = process.env.ELECTRON_SERVER_URL || 'https://geoclaw.coze.site';
+    const prodUrl = 'https://geoclaw.coze.site';
     console.log('[Electron] 生产环境API地址:', prodUrl);
     return { apiBaseUrl: prodUrl };
   }
@@ -665,8 +688,15 @@ export class PlatformAuthManager {
       cookieObj[c.name] = c.value;
     });
 
-    let accountId = crypto.randomUUID();
+    // 由于没有登录窗口，无法从 DOM 获取用户信息，使用默认名称
+    console.log(`[Electron] 使用默认用户名称（无登录窗口）`);
     const displayName = `${config.name}用户`;
+    const avatar = undefined;
+    const fansCount = 0;
+    
+    console.log(`[Electron] 最终显示名称: ${displayName}`);
+
+    let accountId = crypto.randomUUID();
 
     const accountData = {
       id: accountId,
@@ -674,6 +704,8 @@ export class PlatformAuthManager {
       platform: platform,
       accountName: displayName,
       displayName: displayName,
+      avatar: avatar,
+      followers: fansCount,
       platformName: config.name,
       cookies: cookieObj,
       metadata: {
@@ -701,7 +733,7 @@ export class PlatformAuthManager {
       dialog.showMessageBox(this.mainWindow, {
         type: 'info',
         title: '账号绑定成功',
-        message: `账号已成功保存到服务器！\n\n平台: ${config.name}\n账号ID: ${accountId}\nBusinessId: ${businessId}`,
+        message: `账号已成功保存到服务器！\n\n平台: ${config.name}\n用户名: ${displayName}\n账号ID: ${accountId}`,
         buttons: ['确定'],
       });
     } catch (e: any) {
@@ -714,6 +746,8 @@ export class PlatformAuthManager {
       platform,
       platformName: config.name,
       name: displayName,
+      avatar: avatar,
+      fansCount: fansCount,
       cookies: cookieObj,
       createdAt: Date.now(),
       lastUsed: Date.now(),
@@ -783,8 +817,25 @@ export class PlatformAuthManager {
     }
   }
 
-  // API 调用 - 使用 electron.net 模块（支持代理、SSL证书自动处理）
-  private callAPI(path: string, options: { method: string; body?: string }): Promise<any> {
+  // API 调用 - 使用 electron.net 模块
+  // 自动从主窗口 session 获取认证 cookie，复用 Web 端的用户认证和商家隔离逻辑
+  private async callAPI(path: string, options: { method: string; body?: string }): Promise<any> {
+    // 从主窗口 session 获取认证 cookie
+    let cookieHeader = '';
+    try {
+      const mainSession = this.mainWindow.webContents.session;
+      const cookies = await mainSession.cookies.get({});
+      const userToken = cookies.find(c => c.name === 'user_token');
+      if (userToken) {
+        cookieHeader = `user_token=${userToken.value}`;
+        console.log(`[Electron] 已获取认证 cookie: user_token=${userToken.value.substring(0, 20)}...`);
+      } else {
+        console.log(`[Electron] 警告: 主窗口 session 中未找到 user_token cookie`);
+      }
+    } catch (e) {
+      console.error(`[Electron] 获取认证 cookie 失败:`, e);
+    }
+
     return new Promise((resolve, reject) => {
       const url = new URL(path, this.apiBaseUrl);
       
@@ -799,6 +850,9 @@ export class PlatformAuthManager {
       });
 
       request.setHeader('Content-Type', 'application/json');
+      if (cookieHeader) {
+        request.setHeader('Cookie', cookieHeader);
+      }
 
       request.on('response', (response) => {
         let data = '';
@@ -848,6 +902,232 @@ export class PlatformAuthManager {
       
       request.end();
     });
+  }
+
+  // 获取平台用户信息 - 从登录窗口 DOM 中提取
+  // 使用 DOM 抓取方式，不依赖平台 API
+  private async fetchPlatformUserInfo(
+    loginWindow: BrowserWindow,
+    platform: string
+  ): Promise<{ name: string; avatar?: string; fansCount?: number }> {
+    this.writeLog(`[Electron] 从登录窗口 DOM 获取平台用户信息: ${platform}`);
+    
+    if (!loginWindow || loginWindow.isDestroyed()) {
+      this.writeLog(`[Electron] 登录窗口已关闭，无法获取用户信息`);
+      return { name: '' };
+    }
+
+    try {
+      // 平台特定的 DOM 选择器配置
+      const platformSelectors: Record<string, { 
+        nameSelectors: string[]; 
+        avatarSelectors: string[];
+      }> = {
+        toutiao: {
+          nameSelectors: [
+            '.user-name', '.nickname', '.username',
+            '[class*="user-name"]', '[class*="nickname"]',
+            'header [class*="name"]', '.user-info-name',
+            '.account-name', '.mp-name',
+          ],
+          avatarSelectors: [
+            '.avatar img', '.user-avatar img', '.mp-avatar img',
+            'img[class*="avatar"]', 'img[src*="avatar"]',
+          ],
+        },
+        zhihu: {
+          nameSelectors: [
+            '.UserLink-name', '.ProfileHeader-name', '.name',
+            '[class*="UserLink-name"]', '.css-1wqsp99',
+            'header [class*="name"]',
+          ],
+          avatarSelectors: [
+            '.Avatar img', '.ProfileHeader-avatar img',
+            'img[class*="Avatar"]', 'img[class*="avatar"]',
+          ],
+        },
+        weibo: {
+          nameSelectors: [
+            '.name', '.user-name', '.screen-name',
+            '[class*="screen-name"]', '[class*="userName"]',
+            'header [class*="name"]',
+          ],
+          avatarSelectors: [
+            '.avatar img', '.user-avatar img', '.head_pic img',
+            'img[class*="avatar"]', 'img[action-type="feed_list_avatar"]',
+          ],
+        },
+        bilibili: {
+          nameSelectors: [
+            '.nickname', '.username', '.name',
+            '[class*="nickname"]', '[class*="userName"]',
+            '.header-entry-avatar', '.user-con .name',
+          ],
+          avatarSelectors: [
+            '.avatar img', '.user-avatar img', '.nav-user-center img',
+            'img[class*="avatar"]', 'img[class*="Avatar"]',
+          ],
+        },
+        xiaohongshu: {
+          nameSelectors: [
+            '.user-name', '.name', '.nickname',
+            '[class*="user-name"]', '[class*="userName"]',
+            '.creator-name', '.account-name',
+          ],
+          avatarSelectors: [
+            '.avatar img', '.user-avatar img', '.creator-avatar img',
+            'img[class*="avatar"]', 'img[src*="avatar"]',
+          ],
+        },
+        douyin: {
+          nameSelectors: [
+            '.user-name', '.name', '.nickname',
+            '[class*="user-name"]', '[class*="userName"]',
+            '.creator-name', '.account-name',
+          ],
+          avatarSelectors: [
+            '.avatar img', '.user-avatar img', '.creator-avatar img',
+            'img[class*="avatar"]', 'img[src*="avatar"]',
+          ],
+        },
+        wechat: {
+          nameSelectors: [
+            '.weui-desktop-account__nickname', '.account_setting_item',
+            '[class*="nickname"]', '.weui-desktop-account a',
+            '.user-info .name', '.account-name',
+          ],
+          avatarSelectors: [
+            '.weui-desktop-account__avatar img', '.weui-desktop-account img',
+            'img[class*="avatar"]', '.head img',
+          ],
+        },
+      };
+
+      // 通用选择器（作为后备）
+      const genericSelectors = {
+        nameSelectors: [
+          '.user-name', '.username', '.nickname', '.name',
+          '[class*="user-name"]', '[class*="username"]', '[class*="nickname"]',
+          'header [class*="name"]', 'nav [class*="user"]',
+          '.user-info [class*="name"]', '.profile [class*="name"]',
+        ],
+        avatarSelectors: [
+          '.avatar img', '.user-avatar img', '.profile-avatar img',
+          'img[class*="avatar"]', 'img[src*="avatar"]',
+          'img[alt*="avatar"]', 'img[alt*="头像"]',
+        ],
+      };
+
+      const selectors = platformSelectors[platform] || genericSelectors;
+      
+      this.writeLog(`[Electron] 使用选择器: ${JSON.stringify(selectors)}`);
+
+      // 在登录窗口中执行 JavaScript 提取用户信息
+      const userInfo = await loginWindow.webContents.executeJavaScript(`
+        (function() {
+          const selectors = ${JSON.stringify(selectors)};
+          
+          let name = '';
+          let avatar = '';
+          
+          // 尝试从 DOM 元素提取用户名
+          for (const sel of selectors.nameSelectors) {
+            try {
+              const elements = document.querySelectorAll(sel);
+              for (const el of elements) {
+                const text = el.textContent?.trim() || el.getAttribute('title') || el.getAttribute('alt') || '';
+                // 过滤掉太长的文本（可能是文章内容）
+                if (text && text.length > 0 && text.length < 50) {
+                  name = text;
+                  console.log('[DOM] 找到用户名:', sel, '->', name);
+                  break;
+                }
+              }
+              if (name) break;
+            } catch (e) {
+              console.log('[DOM] 选择器失败:', sel, e);
+            }
+          }
+          
+          // 尝试从 DOM 元素提取头像
+          for (const sel of selectors.avatarSelectors) {
+            try {
+              const img = document.querySelector(sel);
+              if (img && img.src) {
+                // 排除 data URI 和占位图
+                if (!img.src.startsWith('data:') && !img.src.includes('default')) {
+                  avatar = img.src;
+                  console.log('[DOM] 找到头像:', sel, '->', avatar);
+                  break;
+                }
+              }
+            } catch (e) {
+              console.log('[DOM] 选择器失败:', sel, e);
+            }
+          }
+          
+          // 尝试从全局变量提取（作为补充）
+          if (!name) {
+            try {
+              // React/Redux 状态
+              if (window.__INITIAL_STATE__) {
+                name = window.__INITIAL_STATE__?.user?.name || 
+                       window.__INITIAL_STATE__?.currentUser?.nickname ||
+                       window.__INITIAL_STATE__?.userInfo?.nickname || '';
+                avatar = window.__INITIAL_STATE__?.user?.avatar || 
+                         window.__INITIAL_STATE__?.currentUser?.avatar || '';
+              }
+              // 平台特定全局变量
+              if (!name && window.userInfo) {
+                name = window.userInfo.nickname || window.userInfo.name || '';
+                avatar = window.userInfo.avatar || window.userInfo.avatarUrl || '';
+              }
+              if (!name && window.currentUser) {
+                name = window.currentUser.nickname || window.currentUser.name || '';
+                avatar = window.currentUser.avatar || '';
+              }
+              if (!name && window.__USER_INFO__) {
+                name = window.__USER_INFO__.nickname || window.__USER_INFO__.name || '';
+                avatar = window.__USER_INFO__.avatar || '';
+              }
+            } catch (e) {
+              console.log('[DOM] 全局变量提取失败:', e);
+            }
+          }
+          
+          // 尝试从页面标题提取（最后的手段）
+          if (!name) {
+            const title = document.title;
+            // 常见的标题格式: "用户名 - 平台名" 或 "平台名 - 用户名"
+            const titlePatterns = [
+              /^(.+?)\\s*[-|]\\s*.+$/,  // "用户名 - 平台名"
+              /^.+?\\s*[-|]\\s*(.+)$/,   // "平台名 - 用户名"
+            ];
+            for (const pattern of titlePatterns) {
+              const match = title.match(pattern);
+              if (match && match[1] && match[1].length < 20 && !match[1].includes('登录')) {
+                name = match[1].trim();
+                break;
+              }
+            }
+          }
+          
+          return { name, avatar };
+        })();
+      `);
+
+      this.writeLog(`[Electron] DOM 提取结果: ${JSON.stringify(userInfo)}`);
+      
+      return {
+        name: userInfo.name || '',
+        avatar: userInfo.avatar || undefined,
+        fansCount: 0, // DOM 抓取无法获取粉丝数
+      };
+
+    } catch (error: any) {
+      this.writeLog(`[Electron] 从 DOM 获取用户信息失败: ${error.message}`);
+      return { name: '' };
+    }
   }
 
   // 使用 Node.js 原生 https/http 模块发送请求

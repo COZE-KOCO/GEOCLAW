@@ -2,6 +2,21 @@
  * GEO优化项目数据模型
  */
 
+/**
+ * 统一评分维度（九维度）
+ */
+export interface GEOScoreBreakdown {
+  problemOriented: number;      // 问题导向
+  aiRecognition: number;        // AI识别友好
+  humanizedExpression: number;  // 人性化表达
+  contentQuality: number;       // 内容质量
+  trustAuthority: number;       // 信任权威
+  preciseCitation: number;      // 精准引用
+  structuredData: number;       // 结构化数据
+  multiPlatform: number;        // 多平台适配
+  seoKeywords: number;          // SEO关键词
+}
+
 export interface GEOProject {
   id: string;
   title: string;
@@ -11,14 +26,7 @@ export interface GEOProject {
   references: string[];
   score: number;
   grade: string;
-  breakdown: {
-    humanizedGeo: number;
-    crossValidation: number;
-    eeat: number;
-    preciseCitation: number;
-    structuredContent: number;
-    seoKeywords: number;
-  };
+  breakdown: GEOScoreBreakdown;
   status: 'draft' | 'active' | 'paused' | 'completed';
   isPublic: boolean;
   publishedAt?: Date;

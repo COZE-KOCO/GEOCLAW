@@ -54,8 +54,9 @@ export function ImageSettings({ config, onChange, disabled }: ModuleProps) {
       onChange('enableThumbnail', false);
       onChange('enableContentImages', false);
     } else {
-      // 其他选项默认开启缩略图
+      // 其他选项默认开启缩略图和内容配图
       onChange('enableThumbnail', true);
+      onChange('enableContentImages', true);
     }
   };
 

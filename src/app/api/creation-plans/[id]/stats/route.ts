@@ -62,7 +62,14 @@ export async function PATCH(
     
     // 累加统计值
     if (body.totalCreated !== undefined) {
-      updates.total_created = (currentPlan.total_created || 0) + body.totalCreated;
+      const previousValue = currentPlan.total_created || 0;
+      const incrementValue = body.totalCreated;
+      updates.total_created = previousValue + incrementValue;
+      console.log('[PlanStats] 累加 totalCreated:', {
+        previousValue,
+        incrementValue,
+        newValue: updates.total_created,
+      });
     }
     
     if (body.totalPublished !== undefined) {

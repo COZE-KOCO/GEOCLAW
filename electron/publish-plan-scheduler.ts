@@ -8,7 +8,7 @@
  * - POST /api/publish-plans (action=recordExecution) - 记录执行
  */
 
-import { BrowserWindow, ipcMain } from 'electron';
+import { BrowserWindow, ipcMain, session } from 'electron';
 import * as https from 'https';
 import * as http from 'http';
 
@@ -133,7 +133,7 @@ export class PublishPlanScheduler {
   }
 
   /**
-   * 带重试的 HTTP 请求
+   * 带重试的 HTTP 请求（自动携带认证 cookie）
    */
   private async fetchWithRetry(
     urlPath: string,
@@ -147,6 +147,21 @@ export class PublishPlanScheduler {
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     const { maxRetries = 3, retryDelay = 2000, timeout = 30000, method = 'GET', body } = options;
     let lastError: string = '';
+    
+    // 从主窗口 session 获取认证 cookie
+    let cookieHeader = '';
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      try {
+        const mainSession = this.mainWindow.webContents.session;
+        const cookies = await mainSession.cookies.get({});
+        const userToken = cookies.find(c => c.name === 'user_token');
+        if (userToken) {
+          cookieHeader = `user_token=${userToken.value}`;
+        }
+      } catch (e) {
+        console.warn('[PublishPlanScheduler] 获取认证 cookie 失败:', e);
+      }
+    }
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
@@ -162,6 +177,7 @@ export class PublishPlanScheduler {
             method,
             headers: {
               'Content-Type': 'application/json',
+              ...(cookieHeader ? { 'Cookie': cookieHeader } : {}),
               ...(body ? { 'Content-Length': Buffer.byteLength(JSON.stringify(body)) } : {}),
             },
           };
@@ -244,7 +260,8 @@ export class PublishPlanScheduler {
         return;
       }
 
-      const plans: PublishPlan[] = result.data || [];
+      // API 返回 { success: true, data: plans }，fetchWithRetry 已经包装了一层
+      const plans: PublishPlan[] = result.data.data || result.data || [];
       
       if (plans.length === 0) {
         console.log('[PublishPlanScheduler] 没有待执行的发布计划');

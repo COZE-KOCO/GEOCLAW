@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
@@ -10,16 +11,60 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Loader2 } from 'lucide-react';
 import type { ModuleProps } from '../types';
+
+interface KnowledgeBase {
+  id: string;
+  name: string;
+  description?: string;
+  tableName: string;
+  documentCount: number;
+  status: string;
+}
 
 /**
  * 知识库模块
  * 
  * 包含：
  * - 联网搜索开关
- * - 知识库选择
+ * - 知识库选择（从数据库加载）
  */
 export function KnowledgeBaseModule({ config, onChange, disabled }: ModuleProps) {
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // 加载知识库列表
+  useEffect(() => {
+    const fetchKnowledgeBases = async () => {
+      // 客户端检查，避免 SSR 时访问 localStorage
+      if (typeof window === 'undefined') {
+        return;
+      }
+      
+      // 从 localStorage 获取当前 businessId
+      const businessId = localStorage.getItem('currentBusinessId');
+      if (!businessId) {
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const response = await fetch(`/api/knowledge-bases?businessId=${businessId}`);
+        const result = await response.json();
+        if (result.success) {
+          setKnowledgeBases(result.data);
+        }
+      } catch (error) {
+        console.error('Failed to fetch knowledge bases:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchKnowledgeBases();
+  }, []);
+
   return (
     <div className="space-y-4">
       {/* 联网搜索 */}
@@ -40,23 +85,44 @@ export function KnowledgeBaseModule({ config, onChange, disabled }: ModuleProps)
         <Label>知识库</Label>
         <div className="flex items-center gap-2">
           <Select
-            value={config.knowledgeBaseId || ''}
-            onValueChange={(v) => onChange('knowledgeBaseId', v)}
-            disabled={disabled}
+            value={config.knowledgeBaseId || 'none'}
+            onValueChange={(v) => onChange('knowledgeBaseId', v === 'none' ? '' : v)}
+            disabled={disabled || loading}
           >
             <SelectTrigger className="flex-1">
-              <SelectValue placeholder="没有具体知识库" />
+              {loading ? (
+                <div className="flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>加载中...</span>
+                </div>
+              ) : (
+                <SelectValue placeholder="没有具体知识库" />
+              )}
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="kb1">产品知识库</SelectItem>
-              <SelectItem value="kb2">行业知识库</SelectItem>
+              <SelectItem value="none">不使用知识库</SelectItem>
+              {knowledgeBases.map((kb) => (
+                <SelectItem key={kb.id} value={kb.tableName}>
+                  <div className="flex flex-col">
+                    <span>{kb.name}</span>
+                    {kb.description && (
+                      <span className="text-xs text-gray-500">{kb.description}</span>
+                    )}
+                  </div>
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
-          <Button variant="outline" size="sm" disabled={disabled}>
+          <Button variant="outline" size="sm" disabled={disabled} type="button">
             + 创建知识库
           </Button>
         </div>
-        <p className="text-xs text-gray-500">我们将在知识库的基础上生成内容</p>
+        {knowledgeBases.length === 0 && !loading && (
+          <p className="text-xs text-gray-500">暂无知识库，请先创建知识库</p>
+        )}
+        {knowledgeBases.length > 0 && (
+          <p className="text-xs text-gray-500">我们将在知识库的基础上生成内容</p>
+        )}
       </div>
     </div>
   );

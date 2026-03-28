@@ -39,6 +39,9 @@ export interface Business {
   contactPhone?: string;
   contactEmail?: string;
   
+  // 所有者
+  ownerId?: string;
+  
   status: 'active' | 'inactive' | 'pending';
   verifiedAt?: Date;
   createdAt: Date;
@@ -66,6 +69,7 @@ export interface CreateBusinessInput {
   contactName?: string;
   contactPhone?: string;
   contactEmail?: string;
+  ownerId?: string; // 企业所有者（用户ID）
 }
 
 export interface UpdateBusinessInput {
@@ -176,6 +180,7 @@ export async function createBusiness(input: CreateBusinessInput): Promise<Busine
       business_hours: input.businessHours,
       brand_keywords: input.brandKeywords || [],
       target_keywords: input.targetKeywords || [],
+      owner_id: input.ownerId, // 设置所有者
     })
     .select()
     .single();
@@ -248,21 +253,14 @@ export async function deleteBusiness(id: string): Promise<{ success: boolean; de
       .eq('business_id', id);
     if (accountsCount) deletedCounts.accounts = accountsCount;
     
-    // 2. 删除人设
-    const { count: personasCount } = await client
-      .from('personas')
-      .delete()
-      .eq('business_id', id);
-    if (personasCount) deletedCounts.personas = personasCount;
-    
-    // 3. 删除内容草稿
+    // 2. 删除内容草稿
     const { count: draftsCount } = await client
       .from('content_drafts')
       .delete()
       .eq('business_id', id);
     if (draftsCount) deletedCounts.drafts = draftsCount;
     
-    // 4. 删除发布计划
+    // 3. 删除发布计划
     const { count: plansCount } = await client
       .from('publish_plans')
       .delete()
@@ -328,17 +326,15 @@ export async function activateBusiness(id: string): Promise<Business | null> {
 export async function getBusinessStats(businessId: string): Promise<{
   totalProjects: number;
   totalAccounts: number;
-  totalPersonas: number;
   totalCitations: number;
   totalExposure: number;
   avgPosition: number;
 }> {
   const client = getSupabaseClient();
   
-  const [projectsResult, accountsResult, personasResult, citationsResult, exposureResult] = await Promise.all([
+  const [projectsResult, accountsResult, citationsResult, exposureResult] = await Promise.all([
     client.from('geo_projects').select('id', { count: 'exact' }).eq('business_id', businessId),
     client.from('matrix_accounts').select('id', { count: 'exact' }).eq('business_id', businessId),
-    client.from('personas').select('id', { count: 'exact' }).eq('business_id', businessId),
     client.from('geo_citations').select('position').eq('business_id', businessId),
     client.from('geo_exposure').select('ai_displays').eq('business_id', businessId),
   ]);
@@ -354,7 +350,6 @@ export async function getBusinessStats(businessId: string): Promise<{
   return {
     totalProjects: projectsResult.count || 0,
     totalAccounts: accountsResult.count || 0,
-    totalPersonas: personasResult.count || 0,
     totalCitations: citations.length,
     totalExposure,
     avgPosition: parseFloat(avgPosition.toFixed(1)),
@@ -401,9 +396,50 @@ function transformBusiness(dbRecord: any): Business {
     contactName: dbRecord.contact_name,
     contactPhone: dbRecord.contact_phone,
     contactEmail: dbRecord.contact_email,
+    ownerId: dbRecord.owner_id, // 添加所有者ID
     status: dbRecord.status,
     verifiedAt: dbRecord.verified_at ? new Date(dbRecord.verified_at) : undefined,
     createdAt: new Date(dbRecord.created_at),
     updatedAt: new Date(dbRecord.updated_at),
   };
+}
+
+
+/**
+ * 根据所有者ID获取企业列表
+ */
+export async function getBusinessesByOwner(ownerId: string): Promise<Business[]> {
+  const client = getSupabaseClient();
+  
+  const { data: businesses, error } = await client
+    .from('businesses')
+    .select('*')
+    .eq('owner_id', ownerId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('获取用户企业列表失败:', error);
+    return [];
+  }
+
+  return (businesses || []).map(transformBusiness);
+}
+
+/**
+ * 统计用户创建的企业数量
+ */
+export async function countBusinessesByOwner(ownerId: string): Promise<number> {
+  const client = getSupabaseClient();
+  
+  const { count, error } = await client
+    .from('businesses')
+    .select('*', { count: 'exact', head: true })
+    .eq('owner_id', ownerId);
+
+  if (error) {
+    console.error('统计企业数量失败:', error);
+    return 0;
+  }
+
+  return count || 0;
 }

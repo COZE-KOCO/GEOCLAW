@@ -24,6 +24,9 @@ export type ContentConfig = GenerationConfig;
 export type { ArticleTypeDistribution, GenerationConfig };
 export { defaultGenerationConfig };
 
+// 文章分发策略类型
+export type ArticleDistributionStrategy = 'broadcast' | 'distribute';
+
 // 发布配置
 export interface AutoPublishConfig {
   autoPublish: boolean;
@@ -35,6 +38,7 @@ export interface AutoPublishConfig {
   }>;
   publishStrategy: 'immediate' | 'scheduled' | 'distributed';
   publishTimeSlots: string[];  // 发布时间段 ['09:00', '12:00', '18:00']
+  articleDistribution: ArticleDistributionStrategy;  // 文章分发策略
 }
 
 // 创作计划

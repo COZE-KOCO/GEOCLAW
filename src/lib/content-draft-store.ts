@@ -215,6 +215,25 @@ export async function deleteContentDraft(id: string): Promise<boolean> {
 }
 
 /**
+ * 批量删除文章
+ */
+export async function batchDeleteContentDrafts(ids: string[]): Promise<{ success: boolean; deletedCount: number }> {
+  const client = getSupabaseClient();
+  
+  const { error, count } = await client
+    .from('content_drafts')
+    .delete()
+    .in('id', ids);
+
+  if (error) {
+    console.error('批量删除文章失败:', error);
+    return { success: false, deletedCount: 0 };
+  }
+
+  return { success: true, deletedCount: count || ids.length };
+}
+
+/**
  * 获取文章统计
  */
 export async function getContentDraftStats(businessId: string): Promise<{

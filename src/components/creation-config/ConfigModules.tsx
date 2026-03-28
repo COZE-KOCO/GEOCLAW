@@ -1,13 +1,13 @@
 'use client';
 
-import { Settings, Sparkles, Image, FileText, User, Replace, Database, FileCode, Link2, ExternalLink, Cpu } from 'lucide-react';
+import { Settings, Sparkles, Image, FileText, Replace, Database, FileCode, Link2, ExternalLink, Cpu } from 'lucide-react';
 import { ModuleWrapper } from './shared/ModuleWrapper';
 import { BasicSettings } from './modules/BasicSettings';
 import { ModelSelector } from './modules/ModelSelector';
+import { ModelSelectionMode } from './modules/ModelSelectionMode';
 import { ArticleTypeModule } from './modules/ArticleTypeModule';
 import { ImageSettings } from './modules/ImageSettings';
 import { ContentRequirements } from './modules/ContentRequirements';
-import { PersonaSettings } from './modules/PersonaSettings';
 import { ReplacementSettings } from './modules/ReplacementSettings';
 import { KnowledgeBaseModule } from './modules/KnowledgeBase';
 import { ContentFormat } from './modules/ContentFormat';
@@ -29,7 +29,6 @@ const MODULE_CONFIG: {
   { id: 'type', title: '创作类型', icon: Sparkles },
   { id: 'image', title: '图片', icon: Image },
   { id: 'content', title: '内容要求', icon: FileText },
-  { id: 'persona', title: '拟人化', icon: User },
   { id: 'replace', title: '全文替换', icon: Replace },
   { id: 'knowledge', title: '知识库', icon: Database },
   { id: 'format', title: '内容格式', icon: FileCode },
@@ -79,6 +78,17 @@ export function ConfigModules({
         return undefined;
       case 'model':
         const model = AVAILABLE_MODELS.find(m => m.id === config.model);
+        const mode = config.modelSelectionMode || 'fixed';
+        if (mode === 'fixed') {
+          return model?.name || '默认模型';
+        } else if (mode === 'random') {
+          const poolSize = config.modelPool?.length || 0;
+          return `随机选择 (${poolSize}个模型)`;
+        } else if (mode === 'weighted') {
+          const weights = config.modelWeights || {};
+          const weightCount = Object.keys(weights).length;
+          return `加权选择 (${weightCount}个模型)`;
+        }
         return model?.name || '默认模型';
       case 'type':
         const dist = config.articleTypeDistribution;
@@ -102,8 +112,6 @@ export function ConfigModules({
         return `${imageSource}${config.imageCount ? ` ${config.imageCount}张` : ''}`;
       case 'content':
         return config.language === 'zh-CN' ? '中文' : config.language;
-      case 'persona':
-        return config.personaId ? '已设置' : '未设置';
       case 'replace':
         return config.replacements.length > 0 ? `${config.replacements.length}条规则` : '无';
       case 'knowledge':
@@ -144,8 +152,6 @@ export function ConfigModules({
         return config.imageSource !== 'none' && (config.enableThumbnail || config.enableContentImages || config.imageCount > 0);
       case 'content':
         return true;
-      case 'persona':
-        return !!config.personaId;
       case 'replace':
         return config.replacements.length > 0;
       case 'knowledge':
@@ -167,7 +173,7 @@ export function ConfigModules({
 
   // 图文模式隐藏的模块
   const imageTextHiddenModules: ModuleId[] = mode === 'image-text' 
-    ? ['persona', 'replace', 'knowledge', 'internal', 'external', 'fixed'] 
+    ? ['replace', 'knowledge', 'internal', 'external', 'fixed'] 
     : [];
 
   const allHiddenModules = [...hiddenModules, ...imageTextHiddenModules];
@@ -206,7 +212,7 @@ export function ConfigModules({
               />
             )}
             {module.id === 'model' && (
-              <ModelSelector
+              <ModelSelectionMode
                 config={config}
                 onChange={onChange}
                 disabled={disabled}
@@ -228,13 +234,6 @@ export function ConfigModules({
             )}
             {module.id === 'content' && (
               <ContentRequirements
-                config={config}
-                onChange={onChange}
-                disabled={disabled}
-              />
-            )}
-            {module.id === 'persona' && (
-              <PersonaSettings
                 config={config}
                 onChange={onChange}
                 disabled={disabled}

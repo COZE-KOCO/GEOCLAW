@@ -6,6 +6,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
 import { AppLayout } from '@/components/app-layout';
 import { useBusiness } from '@/contexts/business-context';
 import {
@@ -31,6 +32,17 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import {
   TrendingUp,
   Eye,
   MoreVertical,
@@ -54,6 +66,7 @@ import {
   Inbox,
   Edit,
   ListChecks,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -97,6 +110,11 @@ export default function ProjectsPage() {
   const [tagFilter, setTagFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  
+  // 多选状态
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBatchDeleteDialog, setShowBatchDeleteDialog] = useState(false);
+  const [isBatchDeleting, setIsBatchDeleting] = useState(false);
 
   useEffect(() => {
     if (selectedBusiness) {
@@ -109,6 +127,11 @@ export default function ProjectsPage() {
     
     setLoading(true);
     try {
+      // 先同步发布状态（修复历史数据）
+      await fetch(`/api/content-drafts/sync-published-status?businessId=${selectedBusiness}`, {
+        method: 'POST',
+      });
+      
       // 并行获取文章列表和统计信息
       const [draftsRes, statsRes] = await Promise.all([
         fetch(`/api/content-drafts?businessId=${selectedBusiness}`),
@@ -246,6 +269,63 @@ export default function ProjectsPage() {
     } catch (error) {
       console.error('删除文章失败:', error);
       toast.error(error instanceof Error ? error.message : '删除失败');
+    }
+  };
+  
+  // ============ 多选功能 ============
+  
+  // 全选/取消全选
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedIds(new Set(filteredArticles.map(a => a.id)));
+    } else {
+      setSelectedIds(new Set());
+    }
+  };
+  
+  // 切换单个选中
+  const handleSelectOne = (id: string, checked: boolean) => {
+    const newSelected = new Set(selectedIds);
+    if (checked) {
+      newSelected.add(id);
+    } else {
+      newSelected.delete(id);
+    }
+    setSelectedIds(newSelected);
+  };
+  
+  // 清除选择
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+  };
+  
+  // 批量删除
+  const handleBatchDelete = async () => {
+    if (selectedIds.size === 0) return;
+    
+    setIsBatchDeleting(true);
+    try {
+      const response = await fetch('/api/content-drafts/batch-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedIds) }),
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.error || '批量删除失败');
+      }
+      
+      toast.success(`成功删除 ${result.deletedCount || selectedIds.size} 篇文章`);
+      setSelectedIds(new Set());
+      setShowBatchDeleteDialog(false);
+      fetchData();
+    } catch (error) {
+      console.error('批量删除失败:', error);
+      toast.error(error instanceof Error ? error.message : '批量删除失败');
+    } finally {
+      setIsBatchDeleting(false);
     }
   };
 
@@ -402,6 +482,66 @@ export default function ProjectsPage() {
 
         {/* 文章列表 */}
         <Card className="bg-white dark:bg-gray-800">
+          {/* 批量操作栏 */}
+          {selectedIds.size > 0 && (
+            <div className="bg-blue-50 dark:bg-blue-900/30 border-b border-blue-200 dark:border-blue-700 px-6 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  checked={selectedIds.size === filteredArticles.length}
+                  onCheckedChange={handleSelectAll}
+                />
+                <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                  已选择 {selectedIds.size} 篇文章
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={clearSelection}
+                >
+                  取消选择
+                </Button>
+                <AlertDialog open={showBatchDeleteDialog} onOpenChange={setShowBatchDeleteDialog}>
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="bg-red-600 hover:bg-red-700"
+                    >
+                      <Trash2 className="h-4 w-4 mr-1" />
+                      批量删除
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>确认批量删除</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        确定要删除选中的 {selectedIds.size} 篇文章吗？此操作不可撤销。
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel disabled={isBatchDeleting}>取消</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={handleBatchDelete}
+                        disabled={isBatchDeleting}
+                        className="bg-red-600 hover:bg-red-700"
+                      >
+                        {isBatchDeleting ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            删除中...
+                          </>
+                        ) : (
+                          '确认删除'
+                        )}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
+            </div>
+          )}
           <CardContent className="p-0">
             {loading ? (
               <div className="text-center py-12 text-gray-500">
@@ -417,6 +557,13 @@ export default function ProjectsPage() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-gray-50 dark:bg-gray-900">
+                    <TableHead className="w-12">
+                      <Checkbox
+                        checked={filteredArticles.length > 0 && selectedIds.size === filteredArticles.length}
+                        onCheckedChange={handleSelectAll}
+                        aria-label="全选"
+                      />
+                    </TableHead>
                     <TableHead className="font-medium">标题</TableHead>
                     <TableHead className="font-medium">规则</TableHead>
                     <TableHead className="font-medium">来源</TableHead>
@@ -427,7 +574,14 @@ export default function ProjectsPage() {
                 </TableHeader>
                 <TableBody>
                   {filteredArticles.map((article) => (
-                    <TableRow key={article.id}>
+                    <TableRow key={article.id} className={selectedIds.has(article.id) ? 'bg-blue-50 dark:bg-blue-900/20' : ''}>
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedIds.has(article.id)}
+                          onCheckedChange={(checked) => handleSelectOne(article.id, checked as boolean)}
+                          aria-label="选择此行"
+                        />
+                      </TableCell>
                       <TableCell>
                         <div>
                           <p className="font-medium text-gray-900 dark:text-white">

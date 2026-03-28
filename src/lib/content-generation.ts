@@ -6,13 +6,14 @@
  */
 
 import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
-import { calculateGEOScore, getGrade, type ContentAnalysis } from './geo-scoring';
+import { calculateGEOScore, getGrade, type ContentAnalysisUnified, type GEOScoreUnified } from './geo-scoring-unified';
 import { 
   getPlatformConfig, 
   getPlatformStylePrompt, 
   type ContentType,
   type PlatformConfig 
 } from './platform-config';
+import { ContentEnhancementService, type ContentEnhancementConfig } from './content-enhancement';
 
 // AI模型类型
 export type AIModel = 'doubao' | 'deepseek' | 'qwen' | 'kimi';
@@ -57,6 +58,8 @@ export interface ContentCreationRequest {
   // ========== 扩展配置（来自 GenerationConfig）==========
   
   // 图片设置
+  imageSource?: 'stock' | 'ai' | 'upload' | 'none';  // 图片来源
+  imageFilter?: string;           // 素材库过滤类型
   enableThumbnail?: boolean;      // 启用缩略图
   enableContentImages?: boolean;  // 启用内容配图
   imageCount?: number;            // 配图数量
@@ -101,11 +104,18 @@ export interface ContentCreationRequest {
   creativityLevel?: number;       // 创意程度 (0-100)
   perspective?: string;           // 人称角度
   formality?: string;             // 形式
-  personaId?: string;             // 拟人化设置ID
   replacements?: Array<{ find: string; replace: string }>; // 全文替换规则
   enableWebSearch?: boolean;      // 启用联网搜索
   knowledgeBaseId?: string;       // 知识库ID
   includeKeywords?: string;       // 包含关键词（强制添加到标题中）
+  
+  // 文章规则配置（从创作规则加载）
+  articleRules?: {
+    enableWebSearch?: boolean;
+    enableKnowledgeBase?: boolean;
+    sitemapUrl?: string;
+    targetDomain?: string;
+  };
 }
 
 // 蒸馏词分析结果
@@ -137,11 +147,14 @@ export interface GeneratedContent {
     gradeColor: string;
     gradeDescription: string;
     breakdown: {
-      humanizedGeo: number;
-      crossValidation: number;
-      eeat: number;
+      problemOriented: number;
+      aiRecognition: number;
+      humanizedExpression: number;
+      contentQuality: number;
+      trustAuthority: number;
       preciseCitation: number;
-      structuredContent: number;
+      structuredData: number;
+      multiPlatform: number;
       seoKeywords: number;
     };
     suggestions: string[];
@@ -309,7 +322,8 @@ export async function generateArticle(
   request: ContentCreationRequest,
   distillation: DistillationResult,
   outline: string[],
-  customHeaders?: Record<string, string>
+  customHeaders?: Record<string, string>,
+  enhancedContext?: string
 ): Promise<GeneratedContent> {
   const config = new Config();
   const client = new LLMClient(config, customHeaders);
@@ -392,6 +406,48 @@ export async function generateArticle(
     linkRequirements.push('自动外链：请自行搜索并引用相关的权威来源（.gov/.edu/行业报告）');
   }
 
+  // 构建图片要求
+  const imageRequirements: string[] = [];
+  if (request.imageSource !== 'none') {
+    const imageCount = request.imageCount || 3;
+    
+    if (request.imageSource === 'ai') {
+      // AI生成图片模式
+      if (request.enableContentImages) {
+        imageRequirements.push(`【AI配图要求】`);
+        imageRequirements.push(`- 请在文章中安排 ${imageCount} 张配图`);
+        imageRequirements.push(`- 在需要配图的位置使用以下格式标注：`);
+        imageRequirements.push(`  【配图】图片描述内容（系统将根据描述自动生成图片）`);
+        imageRequirements.push(`- 配图描述要具体，包含主体、场景、风格等信息`);
+        imageRequirements.push(`- 例如：【配图】一位商务人士在现代化办公室使用笔记本电脑，专业风格`);
+        imageRequirements.push(`- 配图应分布在文章不同位置，避免集中在某一段`);
+      }
+      if (request.enableThumbnail) {
+        imageRequirements.push(`- 需要为文章生成一张缩略图作为封面`);
+        imageRequirements.push(`- 在文章开头标注：【封面图】描述（用于文章封面展示）`);
+      }
+    } else if (request.imageSource === 'stock') {
+      // 素材库图片模式
+      if (request.enableContentImages) {
+        imageRequirements.push(`【素材库配图要求】`);
+        imageRequirements.push(`- 请在文章中安排 ${imageCount} 张配图位置`);
+        imageRequirements.push(`- 在需要配图的位置使用以下格式标注：`);
+        imageRequirements.push(`  【配图】图片主题描述（系统将从素材库中选择匹配的图片）`);
+        if (request.imageFilter && request.imageFilter !== 'all') {
+          imageRequirements.push(`- 图片类型限制：${request.imageFilter}`);
+        }
+      }
+    } else if (request.imageSource === 'upload') {
+      // 本地上传图片模式
+      if (request.enableContentImages) {
+        imageRequirements.push(`【本地图片配图要求】`);
+        imageRequirements.push(`- 请在文章中安排 ${imageCount} 张配图位置`);
+        imageRequirements.push(`- 在需要配图的位置使用以下格式标注：`);
+        imageRequirements.push(`  【配图】图片主题描述（系统将从已上传图片中选择）`);
+      }
+    }
+  }
+
   // 构建固定内容
   const fixedContent: string[] = [];
   if (request.enableFixedIntro && request.fixedIntro) {
@@ -429,6 +485,7 @@ ${topRankingPrompt}
 ${structureRequirements.length > 0 ? `【文章结构要求】\n${structureRequirements.join('\n')}\n` : ''}
 ${formatRequirements.length > 0 ? `【格式要求】\n${formatRequirements.join('\n')}\n` : ''}
 ${linkRequirements.length > 0 ? `【链接要求】\n${linkRequirements.join('\n')}\n` : ''}
+${imageRequirements.length > 0 ? `${imageRequirements.join('\n')}\n` : ''}
 ${fixedContent.length > 0 ? `【固定内容】\n${fixedContent.join('\n\n')}\n` : ''}
 【GEO评分标准 - 必须严格遵守】
 你的文章将按以下六大维度评分（满分10分）：
@@ -506,9 +563,9 @@ ${request.enableFaq !== false ? '5. 必须包含常见问题解答部分' : '5. 
 ${outlineText}
 
 核心信息点：${distillation.coreMessage}
-
-${request.brandInfo ? `品牌信息：${request.brandInfo}` : ''}
-${request.avoidTopics?.length ? `避免提及：${request.avoidTopics.join('、')}` : ''}
+${enhancedContext ? `\n【增强内容来源】\n${enhancedContext}` : ''}
+${request.brandInfo ? `\n品牌信息：${request.brandInfo}` : ''}
+${request.avoidTopics?.length ? `\n避免提及：${request.avoidTopics.join('、')}` : ''}
 ${mediaInfo ? `\n可用媒体素材（请在合适位置插入）：
 ${mediaInfo}
 
@@ -612,7 +669,7 @@ ${mediaInfo}
     }
     
     // 自动计算GEO评分
-    const geoAnalysis: ContentAnalysis = {
+    const geoAnalysis: ContentAnalysisUnified = {
       title: result.title,
       content: result.content,
       keywords: keywords,
@@ -707,6 +764,47 @@ export async function createContent(
   // 步骤1：分析蒸馏词
   const distillation = await analyzeTargetQuestion(request, customHeaders);
   
+  // 步骤1.5：内容增强（如果启用了文章规则）
+  let enhancedContext = '';
+  const enhancementResults: {
+    webSearch?: { query: string; results: Array<{ title: string; url: string; snippet: string }> };
+    knowledgeSearch?: { query: string; results: Array<{ content: string; score: number; docId?: string }> };
+    sitemapUrls?: Array<{ loc: string; lastmod?: string; changefreq?: string; priority?: number }>;
+    externalLinks?: Array<{ url: string; title: string }>;
+  } = {};
+  
+  if (request.articleRules) {
+    const enhancementService = new ContentEnhancementService(customHeaders);
+    
+    const config: ContentEnhancementConfig = {
+      enableWebSearch: request.articleRules.enableWebSearch ?? false,
+      enableKnowledgeBase: request.articleRules.enableKnowledgeBase ?? false,
+      sitemapUrl: request.articleRules.sitemapUrl,
+      targetDomain: request.articleRules.targetDomain,
+    };
+    
+    const result = await enhancementService.enhanceContent(
+      request.targetQuestion,
+      distillation.keywords.map(k => k.word),
+      config
+    );
+    
+    enhancedContext = result.enhancedContext;
+    enhancementResults.webSearch = result.webSearchResult;
+    enhancementResults.knowledgeSearch = result.knowledgeResult;
+    enhancementResults.sitemapUrls = result.sitemapUrls;
+    enhancementResults.externalLinks = result.externalLinks;
+    
+    console.log('[Content Generation] 增强结果:', {
+      hasWebSearch: !!result.webSearchResult,
+      webSearchCount: result.webSearchResult?.results.length || 0,
+      hasKnowledge: !!result.knowledgeResult,
+      knowledgeCount: result.knowledgeResult?.results.length || 0,
+      sitemapCount: result.sitemapUrls?.length || 0,
+      externalLinkCount: result.externalLinks?.length || 0,
+    });
+  }
+  
   // 步骤2：生成大纲
   const outline = await generateOutline(request, distillation, customHeaders);
   
@@ -718,7 +816,7 @@ export async function createContent(
     const outlineContent = outline.map((o, i) => `## ${i + 1}. ${o}\n\n（待填充内容）`).join('\n\n');
     const keywords = distillation.keywords.map(k => k.word);
     
-    const geoAnalysis: ContentAnalysis = {
+    const geoAnalysis: ContentAnalysisUnified = {
       title: request.targetQuestion,
       content: outlineContent,
       keywords: keywords,
@@ -749,7 +847,7 @@ export async function createContent(
     };
   } else {
     // 生成完整文章模式
-    generated = await generateArticle(request, distillation, outline, customHeaders);
+    generated = await generateArticle(request, distillation, outline, customHeaders, enhancedContext);
   }
 
   return {

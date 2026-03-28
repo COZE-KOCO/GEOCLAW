@@ -1,23 +1,81 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getCurrentUser, validateBusinessOwnership } from '@/lib/user-auth';
+import { getBusinessesByOwner } from '@/lib/business-store';
+
+/**
+ * 获取用户的商家ID（支持前端传递或使用默认）
+ */
+async function resolveBusinessId(
+  userId: string, 
+  requestBusinessId?: string | null
+): Promise<{ businessId: string } | { needsCreateBusiness: true }> {
+  if (requestBusinessId) {
+    // 前端传递了 businessId，验证用户是否拥有该商家
+    const hasAccess = await validateBusinessOwnership(userId, requestBusinessId);
+    if (!hasAccess) {
+      // 返回需要创建企业标记，而不是错误
+      return { needsCreateBusiness: true };
+    }
+    return { businessId: requestBusinessId };
+  }
+  
+  // 没有传递 businessId，获取用户的第一个商家
+  const businesses = await getBusinessesByOwner(userId);
+  if (businesses.length === 0) {
+    return { needsCreateBusiness: true };
+  }
+  return { businessId: businesses[0].id };
+}
 
 /**
  * GET /api/dashboard
  * 获取 Dashboard 统计数据
- * Query params:
- * - businessId: 商家ID（可选，如果提供则返回商家特定数据）
+ * 注意：用户只能获取自己所属企业的数据
  */
 export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
-    const businessId = searchParams.get('businessId');
-
-    if (businessId) {
-      return getBusinessDashboard(businessId);
+    const user = await getCurrentUser(request);
+    
+    if (!user) {
+      return NextResponse.json({ error: '请先登录' }, { status: 401 });
     }
 
-    // 全局 Dashboard 数据
-    return getGlobalDashboard();
+    const { searchParams } = new URL(request.url);
+    const requestBusinessId = searchParams.get('businessId');
+
+    // 获取用户的商家ID
+    const result = await resolveBusinessId(user.id, requestBusinessId);
+    
+    // 如果用户没有企业，返回空数据 + 引导标记
+    if ('needsCreateBusiness' in result) {
+      return NextResponse.json({
+        success: true,
+        needsCreateBusiness: true,
+        data: {
+          stats: {
+            totalContent: 0,
+            avgScore: '0',
+            aiReferenceRate: 0,
+            keywordCoverage: 0,
+            weeklyGrowth: 0,
+            totalFollowers: 0,
+            totalAccounts: 0,
+          },
+          recentContent: [],
+          platformStats: [],
+          keywordData: [],
+          extra: {
+            totalKeywords: 0,
+            totalRules: 0,
+            activeAccounts: 0,
+            geoProjects: 0,
+          },
+        },
+      });
+    }
+
+    return getBusinessDashboard(result.businessId);
   } catch (error) {
     console.error('获取Dashboard数据失败:', error);
     return NextResponse.json({ error: '获取数据失败' }, { status: 500 });
@@ -129,39 +187,6 @@ async function getBusinessDashboard(businessId: string) {
         activeAccounts,
         geoProjects,
       },
-    },
-  });
-}
-
-/**
- * 获取全局 Dashboard 数据（无商家筛选）
- */
-async function getGlobalDashboard() {
-  const client = getSupabaseClient();
-
-  const [
-    contentResult,
-    accountResult,
-  ] = await Promise.all([
-    client.from('content_drafts').select('*', { count: 'exact', head: true }),
-    client.from('matrix_accounts').select('*', { count: 'exact', head: true }),
-  ]);
-
-  return NextResponse.json({
-    success: true,
-    data: {
-      stats: {
-        totalContent: contentResult.count || 0,
-        avgScore: '7.5',
-        aiReferenceRate: 42,
-        keywordCoverage: 65,
-        weeklyGrowth: 12,
-        totalFollowers: 0,
-        totalAccounts: accountResult.count || 0,
-      },
-      recentContent: [],
-      platformStats: [],
-      keywordData: [],
     },
   });
 }
